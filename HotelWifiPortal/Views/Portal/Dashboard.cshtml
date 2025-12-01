@@ -1,0 +1,219 @@
+@model HotelWifiPortal.Models.ViewModels.GuestDashboardViewModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WiFi Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet" />
+    <style>
+        body { background: #f5f7fa; font-family: 'Segoe UI', sans-serif; }
+        .dashboard-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px 20px; }
+        .card { border: none; border-radius: 15px; box-shadow: 0 5px 20px rgba(0,0,0,0.08); }
+        .usage-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .progress { height: 20px; border-radius: 10px; background: rgba(255,255,255,0.2); }
+        .progress-bar { border-radius: 10px; }
+        .package-card { transition: transform 0.3s, box-shadow 0.3s; cursor: pointer; }
+        .package-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.15); }
+        .package-card.featured { border: 2px solid #28a745; }
+        .btn-purchase { border-radius: 10px; padding: 12px 30px; }
+        .session-item { border-left: 4px solid #667eea; }
+    </style>
+</head>
+<body>
+    <div class="dashboard-header">
+        <div class="container">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h4 class="mb-1"><i class="bi bi-wifi me-2"></i>WiFi Dashboard</h4>
+                    <p class="mb-0 opacity-75">Room @Model.Guest.RoomNumber - @Model.Guest.GuestName</p>
+                </div>
+                <form asp-action="Logout" method="post">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="btn btn-outline-light btn-sm">
+                        <i class="bi bi-box-arrow-right me-1"></i>Logout
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="container py-4">
+        @if (TempData["Success"] != null)
+        {
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        }
+        @if (TempData["Error"] != null)
+        {
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <i class="bi bi-exclamation-circle me-2"></i>@TempData["Error"]
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        }
+
+        <!-- Usage Card -->
+        <div class="card usage-card mb-4">
+            <div class="card-body p-4">
+                <div class="row align-items-center">
+                    <div class="col-md-8">
+                        <h5 class="mb-3"><i class="bi bi-speedometer2 me-2"></i>Your Data Usage</h5>
+                        <div class="progress mb-3">
+                            <div class="progress-bar @(Model.UsagePercentage > 90 ? "bg-danger" : Model.UsagePercentage > 70 ? "bg-warning" : "bg-success")" 
+                                 style="width: @Model.UsagePercentage%"></div>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Used: @Model.UsedQuotaGB.ToString("F2") GB</span>
+                            <span>Remaining: @Model.RemainingQuotaGB.ToString("F2") GB</span>
+                            <span>Total: @Model.TotalQuotaGB.ToString("F2") GB</span>
+                        </div>
+                    </div>
+                    <div class="col-md-4 text-center">
+                        <div class="display-4 fw-bold">@Model.UsagePercentage%</div>
+                        <p class="mb-0 opacity-75">Data Used</p>
+                    </div>
+                </div>
+
+                @if (Model.CurrentPackage != null)
+                {
+                    <div class="mt-3 pt-3 border-top border-white border-opacity-25">
+                        <small class="opacity-75">
+                            <i class="bi bi-gift me-1"></i>
+                            Your @Model.CurrentPackage.Name package includes @Model.CurrentPackage.QuotaGB GB of free data
+                            (@Model.Guest.StayLength day stay)
+                        </small>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @if (Model.IsQuotaExhausted)
+        {
+            <div class="alert alert-warning mb-4">
+                <h5><i class="bi bi-exclamation-triangle me-2"></i>Data Limit Reached</h5>
+                <p class="mb-0">Your free data quota has been exhausted. Purchase a package below to continue browsing.</p>
+            </div>
+        }
+
+        <!-- Stay Info -->
+        <div class="row g-4 mb-4">
+            <div class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <i class="bi bi-calendar-check fs-1 text-primary mb-2"></i>
+                        <h6 class="text-muted">Check-in</h6>
+                        <h5>@Model.Guest.ArrivalDate.ToString("MMM dd, yyyy")</h5>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <i class="bi bi-calendar-x fs-1 text-danger mb-2"></i>
+                        <h6 class="text-muted">Check-out</h6>
+                        <h5>@Model.Guest.DepartureDate.ToString("MMM dd, yyyy")</h5>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <i class="bi bi-clock-history fs-1 text-success mb-2"></i>
+                        <h6 class="text-muted">Stay Duration</h6>
+                        <h5>@Model.Guest.StayLength Days</h5>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Sessions -->
+        @if (Model.ActiveSessions.Any())
+        {
+            <div class="card mb-4">
+                <div class="card-header bg-white">
+                    <h5 class="mb-0"><i class="bi bi-laptop me-2"></i>Connected Devices (@Model.ActiveSessions.Count)</h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="list-group list-group-flush">
+                        @foreach (var session in Model.ActiveSessions)
+                        {
+                            <div class="list-group-item session-item">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>@(session.DeviceName ?? "Unknown Device")</strong>
+                                        <br />
+                                        <small class="text-muted">
+                                            <i class="bi bi-hdd-network me-1"></i>@session.MacAddress
+                                            @if (!string.IsNullOrEmpty(session.IpAddress))
+                                            {
+                                                <span class="ms-2"><i class="bi bi-globe me-1"></i>@session.IpAddress</span>
+                                            }
+                                        </small>
+                                    </div>
+                                    <div class="text-end">
+                                        <span class="badge bg-success">Active</span>
+                                        <br />
+                                        <small class="text-muted">@session.BytesUsedMB.ToString("F1") MB used</small>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+
+        <!-- Available Packages -->
+        @if (Model.AvailablePackages.Any())
+        {
+            <h5 class="mb-3"><i class="bi bi-cart me-2"></i>Need More Data?</h5>
+            <div class="row g-4 mb-4">
+                @foreach (var package in Model.AvailablePackages)
+                {
+                    <div class="col-md-4">
+                        <div class="card package-card h-100 @(package.IsFeatured ? "featured" : "")">
+                            @if (package.IsFeatured)
+                            {
+                                <div class="card-header bg-success text-white text-center py-1">
+                                    <small><i class="bi bi-star-fill me-1"></i>BEST VALUE</small>
+                                </div>
+                            }
+                            <div class="card-body text-center">
+                                <i class="bi bi-@(package.Icon ?? "wifi") fs-1 text-@package.BadgeColor mb-3"></i>
+                                <h5>@package.Name</h5>
+                                <p class="text-muted small">@package.Description</p>
+                                <div class="display-6 fw-bold text-@package.BadgeColor mb-3">
+                                    @package.Currency @package.Price.ToString("F2")
+                                </div>
+                                <form asp-action="PurchasePackage" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="packageId" value="@package.Id" />
+                                    <button type="submit" class="btn btn-@package.BadgeColor btn-purchase w-100"
+                                            onclick="return confirm('Purchase @package.Name for @package.Currency @package.Price.ToString("F2")? This will be charged to your room.');">
+                                        <i class="bi bi-cart-plus me-2"></i>Purchase
+                                    </button>
+                                </form>
+                            </div>
+                            <div class="card-footer bg-white text-center">
+                                <small class="text-muted">Charged to Room @Model.Guest.RoomNumber</small>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+
+        <div class="text-center text-muted">
+            <p><i class="bi bi-info-circle me-1"></i>For assistance, please contact the front desk.</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

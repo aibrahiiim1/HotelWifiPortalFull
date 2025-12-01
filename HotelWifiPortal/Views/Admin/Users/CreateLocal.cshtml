@@ -1,0 +1,78 @@
+@model HotelWifiPortal.Models.ViewModels.LocalUserEditViewModel
+@{
+    ViewData["Title"] = "Add Local User";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-person-plus me-2"></i>Add Local User</h2>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body">
+                <form asp-action="CreateLocal" method="post">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Username <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" asp-for="Username" required />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Room Number</label>
+                            <input type="text" class="form-control" asp-for="RoomNumber" />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Full Name</label>
+                            <input type="text" class="form-control" asp-for="FullName" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" asp-for="Email" />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Password <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" asp-for="Password" required minlength="4" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Confirm Password <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" asp-for="ConfirmPassword" required />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Quota (GB)</label>
+                            <input type="number" class="form-control" asp-for="QuotaGB" min="0" step="0.1" placeholder="Leave empty for unlimited" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Valid Until</label>
+                            <input type="date" class="form-control" asp-for="ValidUntil" />
+                            <small class="text-muted">Leave empty for no expiry</small>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" asp-for="IsActive" checked />
+                            <label class="form-check-label" asp-for="IsActive">Active</label>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <a asp-action="Local" class="btn btn-outline-secondary">Cancel</a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-2"></i>Create User
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

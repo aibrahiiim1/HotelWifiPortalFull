@@ -1,0 +1,143 @@
+@model HotelWifiPortal.Models.ViewModels.GuestLoginViewModel
+@{
+    Layout = null;
+    var hotelName = ViewBag.HotelName ?? "Hotel";
+    var welcomeMessage = ViewBag.WelcomeMessage ?? "Welcome to our hotel WiFi!";
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WiFi Login - @hotelName</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet" />
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+            max-width: 420px;
+            width: 100%;
+            margin: 20px;
+        }
+        .login-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+        .login-header .wifi-icon {
+            font-size: 4rem;
+            margin-bottom: 15px;
+            animation: pulse 2s infinite;
+        }
+        @@keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        .login-body {
+            padding: 40px 30px;
+        }
+        .form-floating {
+            margin-bottom: 20px;
+        }
+        .form-floating input {
+            border-radius: 10px;
+            border: 2px solid #e0e0e0;
+            transition: all 0.3s;
+        }
+        .form-floating input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+        }
+        .btn-login {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 10px;
+            padding: 15px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+        .alert {
+            border-radius: 10px;
+        }
+        .help-text {
+            color: #6c757d;
+            font-size: 0.85rem;
+        }
+        .footer-text {
+            text-align: center;
+            padding: 20px;
+            color: #6c757d;
+            font-size: 0.85rem;
+            border-top: 1px solid #e0e0e0;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <i class="bi bi-wifi login-header .wifi-icon" style="font-size: 4rem; margin-bottom: 15px;"></i>
+            <h2 class="mb-2">@hotelName WiFi</h2>
+            <p class="mb-0 opacity-75">@welcomeMessage</p>
+        </div>
+        
+        <div class="login-body">
+            @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+            {
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-circle me-2"></i>@Model.ErrorMessage
+                </div>
+            }
+
+            <form asp-action="Login" method="post">
+                <input type="hidden" asp-for="MacAddress" />
+                <input type="hidden" asp-for="ReturnUrl" />
+                
+                <div class="form-floating">
+                    <input type="text" class="form-control" asp-for="RoomNumber" placeholder="Room Number" autofocus />
+                    <label asp-for="RoomNumber"><i class="bi bi-door-open me-2"></i>Room Number</label>
+                    <span asp-validation-for="RoomNumber" class="text-danger small"></span>
+                </div>
+
+                <div class="form-floating">
+                    <input type="password" class="form-control" asp-for="Password" placeholder="Password" />
+                    <label asp-for="Password"><i class="bi bi-key me-2"></i>Reservation Number</label>
+                    <span asp-validation-for="Password" class="text-danger small"></span>
+                </div>
+
+                <p class="help-text mb-4">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Enter your room number and the last 4 digits of your reservation number, or the password provided at check-in.
+                </p>
+
+                <button type="submit" class="btn btn-primary btn-login w-100">
+                    <i class="bi bi-box-arrow-in-right me-2"></i>Connect to WiFi
+                </button>
+            </form>
+        </div>
+
+        <div class="footer-text">
+            <p class="mb-1">Need help? Contact the front desk</p>
+            <p class="mb-0"><i class="bi bi-telephone me-1"></i>Dial 0 from your room</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

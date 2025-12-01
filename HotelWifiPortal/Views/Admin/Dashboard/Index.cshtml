@@ -1,0 +1,272 @@
+@model HotelWifiPortal.Models.ViewModels.AdminDashboardViewModel
+@{
+    ViewData["Title"] = "Dashboard";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="row g-4 mb-4">
+    <!-- Stats Cards -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="rounded-circle p-3 bg-primary bg-opacity-10 me-3">
+                        <i class="bi bi-people fs-4 text-primary"></i>
+                    </div>
+                    <div>
+                        <h6 class="text-muted mb-1">Checked-In Guests</h6>
+                        <h3 class="mb-0">@Model.CheckedInGuests</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="rounded-circle p-3 bg-success bg-opacity-10 me-3">
+                        <i class="bi bi-laptop fs-4 text-success"></i>
+                    </div>
+                    <div>
+                        <h6 class="text-muted mb-1">Active Sessions</h6>
+                        <h3 class="mb-0">@Model.ActiveSessions</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="rounded-circle p-3 bg-info bg-opacity-10 me-3">
+                        <i class="bi bi-currency-dollar fs-4 text-info"></i>
+                    </div>
+                    <div>
+                        <h6 class="text-muted mb-1">Today's Revenue</h6>
+                        <h3 class="mb-0">$@Model.TodayRevenue.ToString("N2")</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="rounded-circle p-3 bg-warning bg-opacity-10 me-3">
+                        <i class="bi bi-graph-up fs-4 text-warning"></i>
+                    </div>
+                    <div>
+                        <h6 class="text-muted mb-1">Month Revenue</h6>
+                        <h3 class="mb-0">$@Model.MonthRevenue.ToString("N2")</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- PMS Status -->
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-hdd-network me-2"></i>PMS Connection</span>
+                <span class="badge @(Model.PmsConnected ? "bg-success" : "bg-danger")">
+                    @(Model.PmsConnected ? "Connected" : "Disconnected")
+                </span>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-6 border-end">
+                        <h4 class="text-primary mb-0">@Model.MessagesReceived</h4>
+                        <small class="text-muted">Received</small>
+                    </div>
+                    <div class="col-6">
+                        <h4 class="text-success mb-0">@Model.MessagesSent</h4>
+                        <small class="text-muted">Sent</small>
+                    </div>
+                </div>
+                <hr />
+                <a href="/Admin/Settings/Pms" class="btn btn-sm btn-outline-primary w-100">
+                    <i class="bi bi-gear me-1"></i>Manage PMS
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- WiFi Controllers -->
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <i class="bi bi-router me-2"></i>WiFi Controllers
+            </div>
+            <div class="card-body">
+                @if (Model.WifiControllers.Any())
+                {
+                    @foreach (var controller in Model.WifiControllers)
+                    {
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>
+                                <i class="bi bi-router me-1"></i>@controller.Name
+                                <small class="text-muted">(@controller.Type)</small>
+                            </span>
+                            <span class="badge @(controller.Status == "connected" ? "bg-success" : "bg-secondary")">
+                                @controller.Status
+                            </span>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <p class="text-muted mb-0">No WiFi controllers configured</p>
+                }
+                <hr />
+                <a asp-area="Admin" asp-controller="Settings" asp-action="Wifi" class="btn btn-sm btn-outline-primary w-100">
+                    <i class="bi bi-gear me-1"></i>Manage Controllers
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="col-md-12 col-lg-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <i class="bi bi-lightning me-2"></i>Quick Actions
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="/Admin/Guests/Create" class="btn btn-outline-primary">
+                        <i class="bi bi-person-plus me-2"></i>Add Guest Manually
+                    </a>
+                    <a href="/Admin/Sessions/Active" class="btn btn-outline-success">
+                        <i class="bi bi-laptop me-2"></i>View Active Sessions
+                    </a>
+                    <form action="/Admin/Guests/SyncFromPms" method="post" class="d-grid">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn btn-outline-info @(Model.PmsConnected ? "" : "disabled")" @(Model.PmsConnected ? "" : "disabled")>
+                            <i class="bi bi-arrow-repeat me-2"></i>Sync Guests from PMS
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Recent Guests -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-people me-2"></i>Recent Guests</span>
+                <a href="/Admin/Guests/Index" class="btn btn-sm btn-outline-primary">View All</a>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Room</th>
+                            <th>Guest</th>
+                            <th>Status</th>
+                            <th>Usage</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var guest in Model.RecentGuests)
+                        {
+                            <tr>
+                                <td><span class="badge bg-secondary">@guest.RoomNumber</span></td>
+                                <td>@guest.GuestName</td>
+                                <td>
+                                    <span class="badge @(guest.Status == "checked-in" ? "bg-success" : "bg-secondary")">
+                                        @guest.Status
+                                    </span>
+                                </td>
+                                <td>@guest.UsedQuotaGB.ToString("F1") / @guest.TotalQuotaGB.ToString("F1") GB</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Transactions -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-credit-card me-2"></i>Recent Transactions</span>
+                <a href="/Admin/Packages/Transactions" class="btn btn-sm btn-outline-primary">View All</a>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Room</th>
+                            <th>Package</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var txn in Model.RecentTransactions)
+                        {
+                            <tr>
+                                <td><span class="badge bg-secondary">@txn.RoomNumber</span></td>
+                                <td>@txn.PackageName</td>
+                                <td>@txn.Currency @txn.Amount.ToString("F2")</td>
+                                <td>
+                                    <span class="badge @(txn.Status == "PostedToPMS" ? "bg-success" : txn.Status == "Completed" ? "bg-info" : "bg-warning")">
+                                        @txn.Status
+                                    </span>
+                                </td>
+                            </tr>
+                        }
+                        @if (!Model.RecentTransactions.Any())
+                        {
+                            <tr><td colspan="4" class="text-center text-muted py-3">No transactions yet</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Logs -->
+<div class="card mt-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-journal-text me-2"></i>Recent Activity</span>
+        <a asp-area="Admin" asp-controller="Logs" asp-action="Index" class="btn btn-sm btn-outline-primary">View All</a>
+    </div>
+    <div class="card-body p-0">
+        <div class="list-group list-group-flush" style="max-height: 300px; overflow-y: auto;">
+            @foreach (var log in Model.RecentLogs)
+            {
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <span class="badge @(log.Level == "ERROR" ? "bg-danger" : log.Level == "WARN" ? "bg-warning" : "bg-info") me-2">
+                                @log.Level
+                            </span>
+                            @if (!string.IsNullOrEmpty(log.Category))
+                            {
+                                <span class="badge bg-light text-dark me-2">@log.Category</span>
+                            }
+                            <span>@log.Message</span>
+                        </div>
+                        <small class="text-muted">@log.Timestamp.ToString("HH:mm:ss")</small>
+                    </div>
+                </div>
+            }
+            @if (!Model.RecentLogs.Any())
+            {
+                <div class="list-group-item text-center text-muted py-3">No recent activity</div>
+            }
+        </div>
+    </div>
+</div>

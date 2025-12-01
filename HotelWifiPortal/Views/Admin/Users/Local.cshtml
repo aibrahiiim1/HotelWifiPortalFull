@@ -1,0 +1,163 @@
+@model List<HotelWifiPortal.Models.Entities.LocalUser>
+@{
+    ViewData["Title"] = "Local Users";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-person-badge me-2"></i>Local Users</h2>
+    <a asp-action="CreateLocal" class="btn btn-primary">
+        <i class="bi bi-plus-lg me-2"></i>Add User
+    </a>
+</div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="alert alert-info">
+    <i class="bi bi-info-circle me-2"></i>
+    <strong>Standalone Mode:</strong> Local users can authenticate to the WiFi portal when PMS integration is disabled or for guests without PMS reservations.
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Username</th>
+                        <th>Full Name</th>
+                        <th>Room</th>
+                        <th>Email</th>
+                        <th>Usage</th>
+                        <th>Valid Until</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model != null && Model.Any())
+                    {
+                        @foreach (var user in Model)
+                        {
+                            var usagePercent = user.QuotaGB > 0 ? (user.UsedQuotaBytes / (user.QuotaGB * 1073741824.0) * 100) : 0;
+                            <tr>
+                                <td><strong>@user.Username</strong></td>
+                                <td>@user.FullName</td>
+                                <td>@user.RoomNumber</td>
+                                <td>@user.Email</td>
+                                <td style="min-width: 150px;">
+                                    @if (user.QuotaGB > 0)
+                                    {
+                                        <div class="progress" style="height: 20px;">
+                                            <div class="progress-bar @(usagePercent > 90 ? "bg-danger" : usagePercent > 70 ? "bg-warning" : "bg-success")" 
+                                                 style="width: @usagePercent%;">
+                                                @((user.UsedQuotaBytes / 1073741824.0).ToString("N2")) GB
+                                            </div>
+                                        </div>
+                                        <small class="text-muted">of @user.QuotaGB GB</small>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-success">Unlimited</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.ValidUntil.HasValue)
+                                    {
+                                        if (user.ValidUntil.Value < DateTime.Now)
+                                        {
+                                            <span class="text-danger">@user.ValidUntil.Value.ToString("MMM dd, yyyy")</span>
+                                            <br /><small class="text-danger">Expired</small>
+                                        }
+                                        else
+                                        {
+                                            @user.ValidUntil.Value.ToString("MMM dd, yyyy")
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">No expiry</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.IsActive)
+                                    {
+                                        <span class="badge bg-success">Active</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Inactive</span>
+                                    }
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm">
+                                        <a asp-action="EditLocal" asp-route-id="@user.Id" class="btn btn-outline-primary" title="Edit">
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
+                                        <form asp-action="ResetLocalUsage" asp-route-id="@user.Id" method="post" class="d-inline">
+                                            @Html.AntiForgeryToken()
+                                            <button type="submit" class="btn btn-outline-warning" title="Reset Usage">
+                                                <i class="bi bi-arrow-counterclockwise"></i>
+                                            </button>
+                                        </form>
+                                        <button type="button" class="btn btn-outline-danger" title="Delete"
+                                                onclick="confirmDelete(@user.Id, '@user.Username')">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr>
+                            <td colspan="8" class="text-center py-4 text-muted">
+                                <i class="bi bi-inbox display-6 d-block mb-2"></i>
+                                No local users found
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Delete</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                Are you sure you want to delete the user "<span id="deleteUserName"></span>"?
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form id="deleteForm" method="post" class="d-inline">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+function confirmDelete(id, name) {
+    document.getElementById('deleteUserName').textContent = name;
+    document.getElementById('deleteForm').action = '@Url.Action("DeleteLocal")/' + id;
+    new bootstrap.Modal(document.getElementById('deleteModal')).show();
+}
+</script>
+}

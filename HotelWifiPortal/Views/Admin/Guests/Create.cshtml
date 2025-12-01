@@ -1,0 +1,85 @@
+@model HotelWifiPortal.Models.Entities.Guest
+@{
+    ViewData["Title"] = "Add Guest Manually";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-person-plus me-2"></i>Add Guest Manually</h2>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body">
+                <form asp-action="Create" method="post">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Room Number <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" asp-for="RoomNumber" required />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Reservation Number <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" asp-for="ReservationNumber" required />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Guest Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" asp-for="GuestName" required />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" asp-for="Email" />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Check-In Date <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" asp-for="CheckInDate" required />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Check-Out Date <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" asp-for="CheckOutDate" required />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">VIP Status</label>
+                            <select class="form-select" asp-for="VipStatus">
+                                <option value="">None</option>
+                                <option value="VIP1">VIP 1</option>
+                                <option value="VIP2">VIP 2</option>
+                                <option value="VIP3">VIP 3</option>
+                                <option value="GOLD">Gold</option>
+                                <option value="PLATINUM">Platinum</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" asp-for="Status">
+                                <option value="CheckedIn">Checked In</option>
+                                <option value="Reserved">Reserved</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>Note:</strong> Manual guests will have their reservation number used as the WiFi password.
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <a asp-action="Index" class="btn btn-outline-secondary">Cancel</a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-2"></i>Add Guest
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

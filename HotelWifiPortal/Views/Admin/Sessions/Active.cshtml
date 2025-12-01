@@ -1,0 +1,155 @@
+@model List<HotelWifiPortal.Models.Entities.WifiSession>
+@{
+    ViewData["Title"] = "Active WiFi Sessions";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-broadcast me-2"></i>Active WiFi Sessions</h2>
+    <div>
+        <a asp-action="RefreshUsage" class="btn btn-outline-primary">
+            <i class="bi bi-arrow-clockwise me-2"></i>Refresh All Usage
+        </a>
+        <a asp-action="Index" class="btn btn-outline-secondary">
+            <i class="bi bi-list me-2"></i>All Sessions
+        </a>
+    </div>
+</div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@Model.Count</h3>
+                <small>Active Sessions</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@Model.Select(s => s.RoomNumber).Distinct().Count()</h3>
+                <small>Unique Rooms</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@((Model.Sum(s => s.BytesUsed) / 1073741824.0).ToString("N2")) GB</h3>
+                <small>Total Data Used</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-dark">
+            <div class="card-body text-center">
+                @{
+                    var avgDuration = Model.Any() ? Model.Average(s => (DateTime.UtcNow - s.SessionStart).TotalMinutes) : 0;
+                }
+                <h3 class="mb-0">@TimeSpan.FromMinutes(avgDuration).ToString(@"hh\:mm")</h3>
+                <small>Avg Session Time</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Room</th>
+                        <th>Guest</th>
+                        <th>Device</th>
+                        <th>MAC Address</th>
+                        <th>IP Address</th>
+                        <th>Started</th>
+                        <th>Duration</th>
+                        <th>Data Used</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model != null && Model.Any())
+                    {
+                        @foreach (var session in Model.OrderBy(s => s.RoomNumber))
+                        {
+                            <tr>
+                                <td><strong>@session.RoomNumber</strong></td>
+                                <td>@session.GuestName</td>
+                                <td>
+                                    <i class="bi bi-@(session.DeviceType == "Mobile" ? "phone" : session.DeviceType == "Tablet" ? "tablet" : "laptop") me-1"></i>
+                                    @(session.DeviceType ?? "Unknown")
+                                </td>
+                                <td><code>@session.MacAddress</code></td>
+                                <td>@session.IpAddress</td>
+                                <td>
+                                    @session.SessionStart.ToString("HH:mm:ss")<br />
+                                    <small class="text-muted">@session.SessionStart.ToString("MMM dd")</small>
+                                </td>
+                                <td>
+                                    @{
+                                        var duration = DateTime.UtcNow - session.SessionStart;
+                                    }
+                                    <span class="badge bg-light text-dark">@duration.ToString(@"hh\:mm\:ss")</span>
+                                </td>
+                                <td>
+                                    @{
+                                        var mbUsed = session.BytesUsed / 1048576.0;
+                                    }
+                                    @if (mbUsed >= 1024)
+                                    {
+                                        <span class="fw-bold">@((mbUsed / 1024).ToString("N2")) GB</span>
+                                    }
+                                    else
+                                    {
+                                        <span>@mbUsed.ToString("N1") MB</span>
+                                    }
+                                </td>
+                                <td>
+                                    <form asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" 
+                                                onclick="return confirm('Disconnect this device?')">
+                                            <i class="bi bi-x-circle"></i> Disconnect
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr>
+                            <td colspan="9" class="text-center py-5 text-muted">
+                                <i class="bi bi-wifi-off display-4 d-block mb-3"></i>
+                                <h5>No Active Sessions</h5>
+                                <p>There are currently no active WiFi sessions.</p>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    // Auto-refresh every 30 seconds
+    setTimeout(function() {
+        location.reload();
+    }, 30000);
+</script>
+}

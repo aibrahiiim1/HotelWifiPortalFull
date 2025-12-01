@@ -1,0 +1,97 @@
+@model HotelWifiPortal.Models.Entities.Guest
+@{
+    ViewData["Title"] = "Edit Guest";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-person-gear me-2"></i>Edit Guest</h2>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body">
+                <form asp-action="Edit" method="post">
+                    <input type="hidden" asp-for="Id" />
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Room Number <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" asp-for="RoomNumber" required />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Reservation Number <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" asp-for="ReservationNumber" required />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Guest Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" asp-for="GuestName" required />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" asp-for="Email" />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Check-In Date <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" asp-for="CheckInDate" required />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Check-Out Date <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" asp-for="CheckOutDate" required />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">VIP Status</label>
+                            <select class="form-select" asp-for="VipStatus">
+                                <option value="">None</option>
+                                <option value="VIP1">VIP 1</option>
+                                <option value="VIP2">VIP 2</option>
+                                <option value="VIP3">VIP 3</option>
+                                <option value="GOLD">Gold</option>
+                                <option value="PLATINUM">Platinum</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" asp-for="Status">
+                                <option value="CheckedIn">Checked In</option>
+                                <option value="CheckedOut">Checked Out</option>
+                                <option value="Reserved">Reserved</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Total Quota (GB)</label>
+                            <input type="number" class="form-control" name="TotalQuotaGB" 
+                                   value="@(Model.TotalQuotaBytes / 1073741824.0)" step="0.1" min="0" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Used Quota (GB)</label>
+                            <input type="number" class="form-control" readonly 
+                                   value="@((Model.UsedQuotaBytes / 1073741824.0).ToString("N2"))" />
+                            <small class="text-muted">Read-only</small>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <a asp-action="Index" class="btn btn-outline-secondary">Cancel</a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-2"></i>Save Changes
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

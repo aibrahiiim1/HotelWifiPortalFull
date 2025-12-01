@@ -1,0 +1,153 @@
+@model PmsSettingsViewModel
+@{
+    ViewData["Title"] = "PMS Connection Settings";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-hdd-network me-2"></i>FIAS/PMS Configuration
+            </div>
+            <div class="card-body">
+                <form asp-action="Pms" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" asp-for="Id" />
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label asp-for="PmsType" class="form-label">PMS Type</label>
+                            <select asp-for="PmsType" class="form-select">
+                                <option value="Protel">Protel</option>
+                                <option value="Opera">Opera</option>
+                                <option value="Mews">Mews</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label asp-for="Name" class="form-label">Connection Name</label>
+                            <input asp-for="Name" class="form-control" />
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label asp-for="ListenPort" class="form-label">Listen Port</label>
+                            <input asp-for="ListenPort" type="number" class="form-control" />
+                            <small class="text-muted">Default: 5008</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label asp-for="ListenIpAddress" class="form-label">Listen IP Address</label>
+                            <input asp-for="ListenIpAddress" class="form-control" />
+                            <small class="text-muted">Use 0.0.0.0 for all interfaces</small>
+                        </div>
+                    </div>
+
+                    <hr />
+
+                    <h6 class="mb-3">Operation Mode</h6>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input asp-for="IsEnabled" class="form-check-input" type="checkbox" />
+                                <label asp-for="IsEnabled" class="form-check-label">Enable PMS Connection</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input asp-for="IsPmsModeEnabled" class="form-check-input" type="checkbox" />
+                                <label asp-for="IsPmsModeEnabled" class="form-check-label">Use PMS for Guest Authentication</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr />
+
+                    <h6 class="mb-3">Posting Settings</h6>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input asp-for="AutoPostCharges" class="form-check-input" type="checkbox" />
+                                <label asp-for="AutoPostCharges" class="form-check-label">Auto-Post Charges to PMS</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="PostingCurrency" class="form-label">Currency</label>
+                            <input asp-for="PostingCurrency" class="form-control" maxlength="3" />
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="PostingDescription" class="form-label">Posting Description</label>
+                            <input asp-for="PostingDescription" class="form-control" />
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i>Save Settings
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-activity me-2"></i>Connection Status
+            </div>
+            <div class="card-body text-center">
+                <div class="mb-3">
+                    <span class="rounded-circle d-inline-block @(Model.IsConnected ? "bg-success" : "bg-danger")" 
+                          style="width: 80px; height: 80px;"></span>
+                </div>
+                <h4>@(Model.IsConnected ? "CONNECTED" : "DISCONNECTED")</h4>
+                @if (!string.IsNullOrEmpty(Model.ClientIpAddress))
+                {
+                    <p class="text-muted mb-0">Client: @Model.ClientIpAddress</p>
+                }
+                @if (Model.LastConnectionTime.HasValue)
+                {
+                    <p class="text-muted mb-0">
+                        <small>Last connected: @Model.LastConnectionTime.Value.ToString("g")</small>
+                    </p>
+                }
+            </div>
+            <div class="card-footer bg-white">
+                <div class="row text-center">
+                    <div class="col-6 border-end">
+                        <h5 class="mb-0 text-primary">@Model.MessagesReceived</h5>
+                        <small class="text-muted">Received</small>
+                    </div>
+                    <div class="col-6">
+                        <h5 class="mb-0 text-success">@Model.MessagesSent</h5>
+                        <small class="text-muted">Sent</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-lightning me-2"></i>Quick Actions
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <form asp-action="PmsRequestResync" method="post">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn btn-success w-100" @(Model.IsConnected ? "" : "disabled")>
+                            <i class="bi bi-arrow-repeat me-2"></i>Request Database Resync
+                        </button>
+                    </form>
+                    <form asp-action="PmsDisconnect" method="post">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn btn-warning w-100" @(Model.IsConnected ? "" : "disabled")>
+                            <i class="bi bi-plug me-2"></i>Disconnect Client
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

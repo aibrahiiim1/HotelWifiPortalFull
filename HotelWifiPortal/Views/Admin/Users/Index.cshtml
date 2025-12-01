@@ -1,0 +1,180 @@
+@model List<HotelWifiPortal.Models.Entities.AdminUser>
+@{
+    ViewData["Title"] = "Admin Users";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-people me-2"></i>Admin Users</h2>
+    <a asp-action="Create" class="btn btn-primary">
+        <i class="bi bi-plus-lg me-2"></i>Add User
+    </a>
+</div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-exclamation-triangle me-2"></i>@TempData["Error"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Username</th>
+                        <th>Full Name</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Last Login</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model != null && Model.Any())
+                    {
+                        @foreach (var user in Model)
+                        {
+                            <tr>
+                                <td><strong>@user.Username</strong></td>
+                                <td>@user.FullName</td>
+                                <td>@user.Email</td>
+                                <td>
+                                    @switch (user.Role)
+                                    {
+                                        case "SuperAdmin":
+                                            <span class="badge bg-danger">Super Admin</span>
+                                            break;
+                                        case "Admin":
+                                            <span class="badge bg-primary">Admin</span>
+                                            break;
+                                        case "Manager":
+                                            <span class="badge bg-info">Manager</span>
+                                            break;
+                                        case "Viewer":
+                                            <span class="badge bg-secondary">Viewer</span>
+                                            break;
+                                        default:
+                                            <span class="badge bg-secondary">@user.Role</span>
+                                            break;
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.LastLogin.HasValue)
+                                    {
+                                        @user.LastLogin.Value.ToString("MMM dd, yyyy HH:mm")
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">Never</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.IsActive)
+                                    {
+                                        <span class="badge bg-success">Active</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Inactive</span>
+                                    }
+                                </td>
+                                <td>
+                                    <a asp-action="Edit" asp-route-id="@user.Id" class="btn btn-sm btn-outline-primary">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    @if (user.Role != "SuperAdmin" || Model.Count(u => u.Role == "SuperAdmin") > 1)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                onclick="confirmDelete(@user.Id, '@user.Username')">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr>
+                            <td colspan="7" class="text-center py-4 text-muted">
+                                <i class="bi bi-inbox display-6 d-block mb-2"></i>
+                                No admin users found
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header bg-light">
+        <h6 class="mb-0"><i class="bi bi-shield-lock me-2"></i>Role Permissions</h6>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-3">
+                <h6><span class="badge bg-danger me-2">Super Admin</span></h6>
+                <p class="text-muted small">Full system access including user management and system settings.</p>
+            </div>
+            <div class="col-md-3">
+                <h6><span class="badge bg-primary me-2">Admin</span></h6>
+                <p class="text-muted small">Full access except cannot manage other admins or critical settings.</p>
+            </div>
+            <div class="col-md-3">
+                <h6><span class="badge bg-info me-2">Manager</span></h6>
+                <p class="text-muted small">Can manage guests, sessions, packages. Cannot change system settings.</p>
+            </div>
+            <div class="col-md-3">
+                <h6><span class="badge bg-secondary me-2">Viewer</span></h6>
+                <p class="text-muted small">Read-only access to dashboard and reports.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Delete</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                Are you sure you want to delete the user "<span id="deleteUserName"></span>"?
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form id="deleteForm" method="post" class="d-inline">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+function confirmDelete(id, name) {
+    document.getElementById('deleteUserName').textContent = name;
+    document.getElementById('deleteForm').action = '@Url.Action("Delete")/' + id;
+    new bootstrap.Modal(document.getElementById('deleteModal')).show();
+}
+</script>
+}

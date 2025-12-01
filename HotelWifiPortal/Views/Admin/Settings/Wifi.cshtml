@@ -1,0 +1,111 @@
+@model List<WifiControllerSettings>
+@{
+    ViewData["Title"] = "WiFi Controllers";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <p class="text-muted mb-0">Configure WiFi controllers for guest authentication and bandwidth management.</p>
+    <a asp-action="CreateWifi" class="btn btn-primary">
+        <i class="bi bi-plus-lg me-1"></i>Add Controller
+    </a>
+</div>
+
+<div class="row g-4">
+    @foreach (var controller in Model)
+    {
+        <div class="col-md-6 col-lg-4">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>
+                        <i class="bi bi-router me-2"></i>@controller.Name
+                    </span>
+                    <span class="badge @(controller.IsEnabled ? "bg-success" : "bg-secondary")">
+                        @(controller.IsEnabled ? "Enabled" : "Disabled")
+                    </span>
+                </div>
+                <div class="card-body">
+                    <dl class="mb-0">
+                        <dt>Type</dt>
+                        <dd>
+                            <span class="badge bg-info">@controller.ControllerType</span>
+                            @if (controller.IsDefault)
+                            {
+                                <span class="badge bg-primary ms-1">Default</span>
+                            }
+                        </dd>
+                        <dt>IP Address</dt>
+                        <dd>@(controller.IpAddress ?? "Not set")@(controller.Port.HasValue ? $":{controller.Port}" : "")</dd>
+                        <dt>Connection Status</dt>
+                        <dd>
+                            <span class="badge @(controller.ConnectionStatus == "connected" ? "bg-success" : "bg-secondary")">
+                                @(controller.ConnectionStatus ?? "Unknown")
+                            </span>
+                            @if (controller.LastConnectionTest.HasValue)
+                            {
+                                <small class="text-muted ms-2">@controller.LastConnectionTest.Value.ToString("g")</small>
+                            }
+                        </dd>
+                    </dl>
+                </div>
+                <div class="card-footer bg-white">
+                    <div class="btn-group w-100">
+                        <form asp-action="TestWifiConnection" asp-route-id="@controller.Id" method="post" class="d-inline">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn btn-sm btn-outline-success">
+                                <i class="bi bi-plug me-1"></i>Test
+                            </button>
+                        </form>
+                        <a asp-action="EditWifi" asp-route-id="@controller.Id" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-pencil me-1"></i>Edit
+                        </a>
+                        <form asp-action="DeleteWifi" asp-route-id="@controller.Id" method="post" class="d-inline" onsubmit="return confirm('Delete this controller?');">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash me-1"></i>Delete
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (!Model.Any())
+    {
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-router fs-1 text-muted mb-3"></i>
+                    <h5>No WiFi Controllers Configured</h5>
+                    <p class="text-muted">Add a WiFi controller to enable guest authentication and bandwidth management.</p>
+                    <a asp-action="CreateWifi" class="btn btn-primary">
+                        <i class="bi bi-plus-lg me-1"></i>Add Controller
+                    </a>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="card mt-4">
+    <div class="card-header">
+        <i class="bi bi-info-circle me-2"></i>Supported Controllers
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4">
+                <h6><i class="bi bi-router me-2"></i>Ruckus ZoneDirector</h6>
+                <p class="text-muted small">Supports user authentication, bandwidth limiting, client management via REST API.</p>
+            </div>
+            <div class="col-md-4">
+                <h6><i class="bi bi-router me-2"></i>MikroTik RouterOS</h6>
+                <p class="text-muted small">Supports Hotspot, bandwidth queues, access lists via REST API.</p>
+            </div>
+            <div class="col-md-4">
+                <h6><i class="bi bi-router me-2"></i>ExtremeCloud IQ</h6>
+                <p class="text-muted small">Cloud-managed WiFi with user authentication and client management.</p>
+            </div>
+        </div>
+    </div>
+</div>

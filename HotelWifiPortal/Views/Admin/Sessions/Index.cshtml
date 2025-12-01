@@ -1,0 +1,105 @@
+@model SessionListViewModel
+@{
+    ViewData["Title"] = "WiFi Sessions";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <form method="get" class="d-flex gap-2">
+        <input type="text" name="room" value="@Model.RoomFilter" class="form-control" placeholder="Filter by room..." style="width: 150px;" />
+        <select name="status" class="form-select" style="width: 150px;">
+            <option value="">All Status</option>
+            <option value="Active" selected="@(Model.StatusFilter == "Active")">Active</option>
+            <option value="Disconnected" selected="@(Model.StatusFilter == "Disconnected")">Disconnected</option>
+            <option value="Blocked" selected="@(Model.StatusFilter == "Blocked")">Blocked</option>
+        </select>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i></button>
+    </form>
+    <div>
+        <a asp-action="Active" class="btn btn-success">
+            <i class="bi bi-broadcast me-1"></i>Live Sessions
+        </a>
+        <form asp-action="RefreshUsage" method="post" class="d-inline">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-outline-primary">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Usage
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Room</th>
+                    <th>Guest</th>
+                    <th>MAC Address</th>
+                    <th>IP Address</th>
+                    <th>Data Used</th>
+                    <th>Duration</th>
+                    <th>Controller</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var session in Model.Sessions)
+                {
+                    <tr>
+                        <td><span class="badge bg-secondary">@session.RoomNumber</span></td>
+                        <td>@(session.GuestName ?? session.Guest?.GuestName ?? "-")</td>
+                        <td><code>@session.MacAddress</code></td>
+                        <td>@(session.IpAddress ?? "-")</td>
+                        <td>@session.BytesUsedMB.ToString("F1") MB</td>
+                        <td>
+                            @if (session.SessionDuration.HasValue)
+                            {
+                                @session.SessionDuration.Value.ToString(@"hh\:mm\:ss")
+                            }
+                        </td>
+                        <td><span class="badge bg-info">@(session.ControllerType ?? "-")</span></td>
+                        <td>
+                            <span class="badge @(session.Status == "Active" ? "bg-success" : session.Status == "Blocked" ? "bg-danger" : "bg-secondary")">
+                                @session.Status
+                            </span>
+                        </td>
+                        <td>
+                            @if (session.Status == "Active")
+                            {
+                                <div class="btn-group btn-group-sm">
+                                    <form asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline" onsubmit="return confirm('Disconnect this session?');">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn btn-outline-warning" title="Disconnect">
+                                            <i class="bi bi-plug"></i>
+                                        </button>
+                                    </form>
+                                    <form asp-action="Block" asp-route-id="@session.Id" method="post" class="d-inline" onsubmit="return confirm('Block this device?');">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn btn-outline-danger" title="Block">
+                                            <i class="bi bi-shield-x"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            }
+                        </td>
+                    </tr>
+                }
+                @if (!Model.Sessions.Any())
+                {
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-5">
+                            <i class="bi bi-laptop fs-1 d-block mb-3"></i>
+                            No sessions found
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<p class="text-muted text-center mt-3">
+    Showing @Model.Sessions.Count of @Model.TotalCount sessions
+</p>

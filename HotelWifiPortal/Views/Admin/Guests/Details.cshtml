@@ -1,0 +1,258 @@
+@model HotelWifiPortal.Models.Entities.Guest
+@{
+    ViewData["Title"] = "Guest Details";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-person me-2"></i>Guest Details</h2>
+    <div>
+        <a asp-action="Edit" asp-route-id="@Model.Id" class="btn btn-primary">
+            <i class="bi bi-pencil me-2"></i>Edit
+        </a>
+        <a asp-action="Index" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left me-2"></i>Back to List
+        </a>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-person-badge me-2"></i>Guest Information
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-3">
+                    <div class="bg-primary text-white rounded-circle d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px; font-size: 2rem;">
+                        @Model.GuestName?.Substring(0, 1).ToUpper()
+                    </div>
+                    <h4 class="mt-2 mb-0">@Model.GuestName</h4>
+                    @if (!string.IsNullOrEmpty(Model.VipStatus))
+                    {
+                        <span class="badge bg-warning text-dark">@Model.VipStatus</span>
+                    }
+                </div>
+                
+                <hr />
+                
+                <dl class="row mb-0">
+                    <dt class="col-5">Room</dt>
+                    <dd class="col-7"><strong>@Model.RoomNumber</strong></dd>
+                    
+                    <dt class="col-5">Reservation</dt>
+                    <dd class="col-7"><code>@Model.ReservationNumber</code></dd>
+                    
+                    <dt class="col-5">Status</dt>
+                    <dd class="col-7">
+                        @switch (Model.Status)
+                        {
+                            case "CheckedIn":
+                                <span class="badge bg-success">Checked In</span>
+                                break;
+                            case "CheckedOut":
+                                <span class="badge bg-secondary">Checked Out</span>
+                                break;
+                            case "Reserved":
+                                <span class="badge bg-info">Reserved</span>
+                                break;
+                            default:
+                                <span class="badge bg-secondary">@Model.Status</span>
+                                break;
+                        }
+                    </dd>
+                    
+                    <dt class="col-5">Check-In</dt>
+                    <dd class="col-7">@Model.CheckInDate.ToString("MMM dd, yyyy")</dd>
+                    
+                    <dt class="col-5">Check-Out</dt>
+                    <dd class="col-7">@Model.CheckOutDate.ToString("MMM dd, yyyy")</dd>
+                    
+                    <dt class="col-5">Stay Length</dt>
+                    <dd class="col-7">@((Model.CheckOutDate - Model.CheckInDate).Days) nights</dd>
+                    
+                    @if (!string.IsNullOrEmpty(Model.Email))
+                    {
+                        <dt class="col-5">Email</dt>
+                        <dd class="col-7">@Model.Email</dd>
+                    }
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-wifi me-2"></i>WiFi Usage
+            </div>
+            <div class="card-body">
+                @{
+                    var usedGB = Model.UsedQuotaBytes / 1073741824.0;
+                    var totalGB = Model.TotalQuotaBytes / 1073741824.0;
+                    var usagePercent = totalGB > 0 ? (usedGB / totalGB * 100) : 0;
+                }
+                
+                <div class="text-center mb-3">
+                    <h3 class="mb-0">@usedGB.ToString("N2") GB</h3>
+                    <small class="text-muted">of @totalGB.ToString("N2") GB used</small>
+                </div>
+                
+                <div class="progress mb-3" style="height: 25px;">
+                    <div class="progress-bar @(usagePercent > 90 ? "bg-danger" : usagePercent > 70 ? "bg-warning" : "bg-success")" 
+                         style="width: @usagePercent%;">
+                        @usagePercent.ToString("N0")%
+                    </div>
+                </div>
+
+                <dl class="row mb-0">
+                    <dt class="col-6">Package</dt>
+                    <dd class="col-6">@(Model.CurrentPackage ?? "Default")</dd>
+                    
+                    <dt class="col-6">Active Sessions</dt>
+                    <dd class="col-6">@(Model.WifiSessions?.Count(s => s.IsActive) ?? 0)</dd>
+                    
+                    <dt class="col-6">Terms Accepted</dt>
+                    <dd class="col-6">
+                        @if (Model.AcceptedTerms)
+                        {
+                            <span class="text-success"><i class="bi bi-check-circle"></i> Yes</span>
+                        }
+                        else
+                        {
+                            <span class="text-muted"><i class="bi bi-x-circle"></i> No</span>
+                        }
+                    </dd>
+                    
+                    <dt class="col-6">First Login</dt>
+                    <dd class="col-6">
+                        @if (Model.FirstLoginAt.HasValue)
+                        {
+                            @Model.FirstLoginAt.Value.ToString("MMM dd HH:mm")
+                        }
+                        else
+                        {
+                            <span class="text-muted">Never</span>
+                        }
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-credit-card me-2"></i>Purchases
+            </div>
+            <div class="card-body">
+                @if (Model.PaymentTransactions != null && Model.PaymentTransactions.Any())
+                {
+                    var totalSpent = Model.PaymentTransactions.Where(t => t.Status == "Completed").Sum(t => t.Amount);
+                    <div class="text-center mb-3">
+                        <h3 class="mb-0 text-success">@Model.PaymentTransactions.First().Currency @totalSpent.ToString("N2")</h3>
+                        <small class="text-muted">Total spent</small>
+                    </div>
+                    
+                    <ul class="list-group list-group-flush">
+                        @foreach (var tx in Model.PaymentTransactions.OrderByDescending(t => t.CreatedAt).Take(5))
+                        {
+                            <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                <div>
+                                    <strong>@tx.PackageName</strong><br />
+                                    <small class="text-muted">@tx.CreatedAt.ToString("MMM dd, HH:mm")</small>
+                                </div>
+                                <span class="badge bg-success">@tx.Currency @tx.Amount</span>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+                    <div class="text-center text-muted py-3">
+                        <i class="bi bi-cart display-6 d-block mb-2"></i>
+                        No purchases yet
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- WiFi Sessions -->
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-laptop me-2"></i>WiFi Sessions
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Device</th>
+                        <th>MAC Address</th>
+                        <th>IP Address</th>
+                        <th>Started</th>
+                        <th>Duration</th>
+                        <th>Data Used</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model.WifiSessions != null && Model.WifiSessions.Any())
+                    {
+                        @foreach (var session in Model.WifiSessions.OrderByDescending(s => s.SessionStart))
+                        {
+                            <tr>
+                                <td>
+                                    <i class="bi bi-@(session.DeviceType == "Mobile" ? "phone" : session.DeviceType == "Tablet" ? "tablet" : "laptop") me-1"></i>
+                                    @(session.DeviceType ?? "Unknown")
+                                </td>
+                                <td><code>@session.MacAddress</code></td>
+                                <td>@session.IpAddress</td>
+                                <td>@session.SessionStart.ToString("MMM dd HH:mm")</td>
+                                <td>
+                                    @{
+                                        var duration = (session.SessionEnd ?? DateTime.UtcNow) - session.SessionStart;
+                                    }
+                                    @duration.ToString(@"hh\:mm\:ss")
+                                </td>
+                                <td>@((session.BytesUsed / 1048576.0).ToString("N1")) MB</td>
+                                <td>
+                                    @if (session.IsActive)
+                                    {
+                                        <span class="badge bg-success">Active</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Ended</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (session.IsActive)
+                                    {
+                                        <form asp-controller="Sessions" asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline">
+                                            @Html.AntiForgeryToken()
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Disconnect">
+                                                <i class="bi bi-x-circle"></i>
+                                            </button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr>
+                            <td colspan="8" class="text-center py-4 text-muted">
+                                No WiFi sessions found
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>

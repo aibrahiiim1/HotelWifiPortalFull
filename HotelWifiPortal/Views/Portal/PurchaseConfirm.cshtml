@@ -1,0 +1,60 @@
+@model HotelWifiPortal.Models.ViewModels.PurchaseConfirmViewModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Purchase Successful</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet" />
+    <style>
+        body { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .success-container { max-width: 500px; margin: 20px; }
+        .card { border: none; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+        .success-icon { font-size: 5rem; color: #28a745; animation: bounceIn 1s; }
+        @@keyframes bounceIn { 0% { transform: scale(0); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
+    </style>
+</head>
+<body>
+    <div class="success-container">
+        <div class="card">
+            <div class="card-body text-center p-5">
+                <i class="bi bi-check-circle-fill success-icon"></i>
+                <h2 class="mt-4 mb-3">Purchase Successful!</h2>
+                <p class="text-muted mb-4">
+                    Your @Model.Package.Name package has been activated.
+                    <br />
+                    <strong>@Model.Package.Currency @Model.Package.Price.ToString("F2")</strong> will be charged to Room @Model.Guest.RoomNumber.
+                </p>
+
+                <div class="bg-light rounded p-3 mb-4">
+                    <div class="row">
+                        <div class="col-6 border-end">
+                            <small class="text-muted d-block">Package</small>
+                            <strong>@Model.Package.Name</strong>
+                        </div>
+                        <div class="col-6">
+                            <small class="text-muted d-block">Transaction ID</small>
+                            <code>@Model.Transaction?.TransactionId.Substring(0, 8)</code>
+                        </div>
+                    </div>
+                </div>
+
+                @if (Model.Transaction?.PostedToPMS == true)
+                {
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle me-2"></i>Charge has been posted to your room folio.
+                    </div>
+                }
+
+                <a asp-action="Dashboard" class="btn btn-success btn-lg">
+                    <i class="bi bi-wifi me-2"></i>Start Browsing
+                </a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

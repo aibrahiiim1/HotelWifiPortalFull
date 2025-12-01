@@ -1,0 +1,132 @@
+@model HotelWifiPortal.Models.ViewModels.SystemSettingsViewModel
+@{
+    ViewData["Title"] = "General Settings";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-gear me-2"></i>General Settings</h2>
+</div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-exclamation-triangle me-2"></i>@TempData["Error"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<form asp-action="Index" method="post">
+    <div class="row">
+        <div class="col-lg-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-building me-2"></i>Hotel Information</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Hotel Name</label>
+                        <input type="text" class="form-control" name="HotelName" value="@Model.HotelName" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Logo URL</label>
+                        <input type="text" class="form-control" name="LogoUrl" value="@Model.LogoUrl" placeholder="/images/logo.png" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Welcome Message</label>
+                        <textarea class="form-control" name="WelcomeMessage" rows="3">@Model.WelcomeMessage</textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Support Email</label>
+                        <input type="email" class="form-control" name="SupportEmail" value="@Model.SupportEmail" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Support Phone</label>
+                        <input type="text" class="form-control" name="SupportPhone" value="@Model.SupportPhone" />
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-wifi me-2"></i>WiFi Session Settings</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Session Timeout (minutes)</label>
+                        <input type="number" class="form-control" name="SessionTimeoutMinutes" value="@Model.SessionTimeoutMinutes" min="5" />
+                        <small class="text-muted">Inactive sessions will be disconnected after this time</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Max Devices Per Room</label>
+                        <input type="number" class="form-control" name="MaxDevicesPerRoom" value="@Model.MaxDevicesPerRoom" min="1" max="20" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Default Bandwidth Profile</label>
+                        <select class="form-select" name="DefaultBandwidthProfileId">
+                            <option value="">-- None --</option>
+                            @if (Model.BandwidthProfiles != null)
+                            {
+                                @foreach (var profile in Model.BandwidthProfiles)
+                                {
+                                    <option value="@profile.Id" selected="@(Model.DefaultBandwidthProfileId == profile.Id)">
+                                        @profile.Name (@profile.DownloadSpeedKbps/@profile.UploadSpeedKbps Kbps)
+                                    </option>
+                                }
+                            }
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-toggles me-2"></i>Features</h5>
+                </div>
+                <div class="card-body">
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="RequireTermsAcceptance" value="true" @(Model.RequireTermsAcceptance ? "checked" : "") />
+                        <label class="form-check-label">Require Terms & Conditions Acceptance</label>
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="AllowGuestRegistration" value="true" @(Model.AllowGuestRegistration ? "checked" : "") />
+                        <label class="form-check-label">Allow Guest Self-Registration</label>
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="EnablePaywall" value="true" @(Model.EnablePaywall ? "checked" : "") />
+                        <label class="form-check-label">Enable Paywall When Quota Exceeded</label>
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="EnableBandwidthLimiting" value="true" @(Model.EnableBandwidthLimiting ? "checked" : "") />
+                        <label class="form-check-label">Enable Bandwidth Limiting</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-file-text me-2"></i>Terms & Conditions</h5>
+        </div>
+        <div class="card-body">
+            <textarea class="form-control" name="TermsAndConditions" rows="6">@Model.TermsAndConditions</textarea>
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-end">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check-lg me-2"></i>Save Settings
+        </button>
+    </div>
+</form>

@@ -1,0 +1,137 @@
+@model GuestListViewModel
+@{
+    ViewData["Title"] = "Guests";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <form method="get" class="d-flex gap-2">
+            <input type="text" name="search" value="@Model.SearchTerm" class="form-control" placeholder="Search room, name, reservation..." style="width: 250px;" />
+            <select name="status" class="form-select" style="width: 150px;">
+                <option value="">All Status</option>
+                <option value="checked-in" selected="@(Model.StatusFilter == "checked-in")">Checked-In</option>
+                <option value="checked-out" selected="@(Model.StatusFilter == "checked-out")">Checked-Out</option>
+            </select>
+            <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i></button>
+        </form>
+    </div>
+    <div>
+        <form asp-action="SyncFromPms" method="post" class="d-inline">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-outline-success me-2">
+                <i class="bi bi-arrow-repeat me-1"></i>Sync from PMS
+            </button>
+        </form>
+        <a asp-action="Create" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-1"></i>Add Guest
+        </a>
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Room</th>
+                    <th>Reservation</th>
+                    <th>Guest Name</th>
+                    <th>Arrival</th>
+                    <th>Departure</th>
+                    <th>Stay</th>
+                    <th>Usage</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var guest in Model.Guests)
+                {
+                    <tr>
+                        <td><span class="badge bg-secondary fs-6">@guest.RoomNumber</span></td>
+                        <td><code>@guest.ReservationNumber</code></td>
+                        <td>
+                            <a asp-action="Details" asp-route-id="@guest.Id" class="text-decoration-none fw-medium">
+                                @guest.GuestName
+                            </a>
+                            @if (!string.IsNullOrEmpty(guest.VipStatus))
+                            {
+                                <span class="badge bg-warning text-dark ms-1">VIP</span>
+                            }
+                        </td>
+                        <td>@guest.ArrivalDate.ToString("MMM dd")</td>
+                        <td>@guest.DepartureDate.ToString("MMM dd")</td>
+                        <td>@guest.StayLength days</td>
+                        <td>
+                            <div class="progress" style="width: 100px; height: 20px;">
+                                @{
+                                    var pct = guest.TotalQuotaBytes > 0 ? (int)((guest.UsedQuotaBytes * 100) / guest.TotalQuotaBytes) : 0;
+                                }
+                                <div class="progress-bar @(pct > 90 ? "bg-danger" : pct > 70 ? "bg-warning" : "bg-success")" style="width: @pct%"></div>
+                            </div>
+                            <small class="text-muted">@guest.UsedQuotaGB.ToString("F1")/@guest.TotalQuotaGB.ToString("F1") GB</small>
+                        </td>
+                        <td>
+                            <span class="badge @(guest.Status == "checked-in" ? "bg-success" : "bg-secondary")">
+                                @guest.Status
+                            </span>
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <a asp-action="Details" asp-route-id="@guest.Id" class="btn btn-outline-primary" title="View">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                <a asp-action="Edit" asp-route-id="@guest.Id" class="btn btn-outline-secondary" title="Edit">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                @if (guest.Status == "checked-in")
+                                {
+                                    <form asp-action="CheckOut" asp-route-id="@guest.Id" method="post" class="d-inline" onsubmit="return confirm('Check out this guest?');">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn btn-outline-warning" title="Check Out">
+                                            <i class="bi bi-box-arrow-right"></i>
+                                        </button>
+                                    </form>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+                @if (!Model.Guests.Any())
+                {
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-5">
+                            <i class="bi bi-people fs-1 d-block mb-3"></i>
+                            No guests found. Use "Sync from PMS" to import guests.
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@if (Model.TotalPages > 1)
+{
+    <nav class="mt-4">
+        <ul class="pagination justify-content-center">
+            <li class="page-item @(Model.PageNumber <= 1 ? "disabled" : "")">
+                <a class="page-link" asp-action="Index" asp-route-page="@(Model.PageNumber - 1)" asp-route-search="@Model.SearchTerm" asp-route-status="@Model.StatusFilter">Previous</a>
+            </li>
+            @for (int i = 1; i <= Model.TotalPages; i++)
+            {
+                <li class="page-item @(i == Model.PageNumber ? "active" : "")">
+                    <a class="page-link" asp-action="Index" asp-route-page="@i" asp-route-search="@Model.SearchTerm" asp-route-status="@Model.StatusFilter">@i</a>
+                </li>
+            }
+            <li class="page-item @(Model.PageNumber >= Model.TotalPages ? "disabled" : "")">
+                <a class="page-link" asp-action="Index" asp-route-page="@(Model.PageNumber + 1)" asp-route-search="@Model.SearchTerm" asp-route-status="@Model.StatusFilter">Next</a>
+            </li>
+        </ul>
+    </nav>
+}
+
+<p class="text-muted text-center mt-3">
+    Showing @Model.Guests.Count of @Model.TotalCount guests
+</p>
