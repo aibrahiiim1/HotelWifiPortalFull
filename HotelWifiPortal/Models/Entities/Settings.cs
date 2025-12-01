@@ -54,6 +54,10 @@ namespace HotelWifiPortal.Models.Entities
         [MaxLength(500)]
         public string? ApiUrl { get; set; }
 
+        // Default SSID for guest authentication
+        [NotMapped]
+        public string? DefaultSSID { get; set; }
+
         // SSL/TLS
         public bool UseHttps { get; set; } = true;
         public bool IgnoreSslErrors { get; set; }

@@ -22,6 +22,7 @@ namespace HotelWifiPortal.Services.WiFi
             return settings.ControllerType switch
             {
                 "Ruckus" => new RuckusController(settings, _loggerFactory.CreateLogger<RuckusController>(), _httpClientFactory),
+                "RuckusZD" => new RuckusZoneDirectorController(settings, _loggerFactory.CreateLogger<RuckusZoneDirectorController>(), _httpClientFactory),
                 "Mikrotik" => new MikrotikController(settings, _loggerFactory.CreateLogger<MikrotikController>(), _httpClientFactory),
                 "ExtremeCloud" => new ExtremeCloudController(settings, _loggerFactory.CreateLogger<ExtremeCloudController>(), _httpClientFactory),
                 _ => null
@@ -124,9 +125,9 @@ namespace HotelWifiPortal.Services.WiFi
                 };
 
                 _dbContext.WifiSessions.Add(session);
-                
+
                 guest.LastWifiLogin = DateTime.UtcNow;
-                
+
                 await _dbContext.SaveChangesAsync();
             }
 
@@ -173,7 +174,7 @@ namespace HotelWifiPortal.Services.WiFi
         {
             var activeSessions = await GetActiveSessionsAsync();
             var controller = await GetDefaultControllerAsync();
-            
+
             if (controller == null) return;
 
             foreach (var session in activeSessions)
@@ -249,9 +250,9 @@ namespace HotelWifiPortal.Services.WiFi
             {
                 var settings = await _dbContext.WifiControllerSettings
                     .FirstOrDefaultAsync(s => s.ControllerType == controllerType);
-                
+
                 if (settings == null) return false;
-                
+
                 controller = _controllerFactory.CreateController(settings);
             }
 
@@ -303,7 +304,7 @@ namespace HotelWifiPortal.Services.WiFi
         {
             // Wait a bit for app to start
             await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-            
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
