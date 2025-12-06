@@ -76,7 +76,7 @@ namespace HotelWifiPortal.Controllers.Portal
             var macAddress = mac ?? clientMac;
             var clientIpAddress = ip ?? clientIp ?? sip;
             var originalUrl = url ?? linkOrig ?? userUrl;
-            
+
             // Log all incoming parameters for debugging
             _logger.LogInformation("=== Portal Access ===");
             _logger.LogInformation("MAC: {Mac}", macAddress ?? "none");
@@ -90,7 +90,7 @@ namespace HotelWifiPortal.Controllers.Portal
             _logger.LogInformation("Error: {Error}", error ?? "none");
             _logger.LogInformation("User-Agent: {UA}", Request.Headers["User-Agent"].ToString());
             _logger.LogInformation("Full Query: {Query}", Request.QueryString.ToString());
-            
+
             // Store parameters in session for later use
             if (!string.IsNullOrEmpty(macAddress))
                 HttpContext.Session.SetString("MacAddress", macAddress);
@@ -138,8 +138,12 @@ namespace HotelWifiPortal.Controllers.Portal
                 MacAddress = macAddress,
                 ClientIp = clientIpAddress ?? Request.HttpContext.Connection.RemoteIpAddress?.ToString(),
                 ReturnUrl = originalUrl,
-                LinkLogin = linkLogin
+                LinkLogin = linkLogin,
+                LinkOrig = linkOrig ?? originalUrl
             };
+
+            _logger.LogInformation("Model LinkLogin: {LinkLogin}", model.LinkLogin ?? "null");
+            _logger.LogInformation("Model LinkOrig: {LinkOrig}", model.LinkOrig ?? "null");
 
             return View("Login", model);
         }
@@ -153,7 +157,7 @@ namespace HotelWifiPortal.Controllers.Portal
             _logger.LogInformation("Room: {Room}", model.RoomNumber);
             _logger.LogInformation("MAC: {Mac}", model.MacAddress ?? HttpContext.Session.GetString("MacAddress"));
             _logger.LogInformation("IP: {Ip}", model.ClientIp ?? HttpContext.Session.GetString("ClientIp"));
-            
+
             if (!ModelState.IsValid)
             {
                 _logger.LogWarning("Model state invalid");
@@ -166,7 +170,7 @@ namespace HotelWifiPortal.Controllers.Portal
             if (!success)
             {
                 _logger.LogWarning("PMS authentication failed: {Error}", error);
-                
+
                 // Try standalone mode if enabled
                 if (await _authService.IsStandaloneModeEnabledAsync())
                 {
@@ -174,16 +178,16 @@ namespace HotelWifiPortal.Controllers.Portal
                     if (localSuccess && localUser != null)
                     {
                         _logger.LogInformation("Local user authenticated: {User}", localUser.Username);
-                        
+
                         var localPrincipal = _authService.CreateLocalUserPrincipal(localUser);
                         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, localPrincipal,
                             new AuthenticationProperties { IsPersistent = true, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7) });
-                        
+
                         // Try Ruckus WISPr auth for local users too
                         var localWisprResult = await TryRuckusWisprAuthAsync(localUser.Username, model.Password);
                         if (localWisprResult != null)
                             return localWisprResult;
-                            
+
                         return RedirectToAction(nameof(Dashboard));
                     }
                 }
@@ -197,10 +201,10 @@ namespace HotelWifiPortal.Controllers.Portal
 
             // Get client info from model or session
             var macAddress = model.MacAddress ?? HttpContext.Session.GetString("MacAddress");
-            var clientIp = model.ClientIp ?? HttpContext.Session.GetString("ClientIp") 
+            var clientIp = model.ClientIp ?? HttpContext.Session.GetString("ClientIp")
                 ?? Request.HttpContext.Connection.RemoteIpAddress?.ToString();
             var linkLogin = model.LinkLogin ?? HttpContext.Session.GetString("LinkLogin");
-            var linkOrig = model.ReturnUrl ?? HttpContext.Session.GetString("LinkOrig") 
+            var linkOrig = model.ReturnUrl ?? model.LinkOrig ?? HttpContext.Session.GetString("LinkOrig")
                 ?? HttpContext.Session.GetString("OriginalUrl");
             var uamIp = HttpContext.Session.GetString("UamIp");
             var uamPort = HttpContext.Session.GetString("UamPort");
@@ -208,17 +212,67 @@ namespace HotelWifiPortal.Controllers.Portal
             _logger.LogInformation("=== Starting WiFi Authentication ===");
             _logger.LogInformation("MAC: {Mac}", macAddress);
             _logger.LogInformation("Client IP: {Ip}", clientIp);
+            _logger.LogInformation("Link-Login: {LinkLogin}", linkLogin ?? "null");
+            _logger.LogInformation("Link-Orig: {LinkOrig}", linkOrig ?? "null");
 
             // ============================================
-            // RADIUS AUTHENTICATION - This is the key!
-            // Send Access-Request to FreeRADIUS so Ruckus knows user is authenticated
+            // CHECK FOR MIKROTIK EXTERNAL PORTAL FIRST
+            // If link-login is present, we MUST redirect back to MikroTik
+            // ============================================
+            if (!string.IsNullOrEmpty(linkLogin))
+            {
+                _logger.LogInformation("=== MikroTik External Portal Mode ===");
+                _logger.LogInformation("Redirecting to MikroTik with credentials...");
+
+                // Build the redirect URL back to MikroTik
+                var mikrotikLoginUrl = linkLogin;
+
+                // Add credentials to the URL
+                if (mikrotikLoginUrl.Contains("?"))
+                {
+                    mikrotikLoginUrl += $"&username={Uri.EscapeDataString(model.RoomNumber)}&password={Uri.EscapeDataString(model.Password)}";
+                }
+                else
+                {
+                    mikrotikLoginUrl += $"?username={Uri.EscapeDataString(model.RoomNumber)}&password={Uri.EscapeDataString(model.Password)}";
+                }
+
+                // Add destination if we have it
+                if (!string.IsNullOrEmpty(linkOrig))
+                {
+                    mikrotikLoginUrl += $"&dst={Uri.EscapeDataString(linkOrig)}";
+                }
+
+                _logger.LogInformation("MikroTik Redirect URL: {Url}", mikrotikLoginUrl);
+
+                // Create authentication cookie for our portal
+                var mikrotikPrincipal = _authService.CreateGuestPrincipal(guest);
+                await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, mikrotikPrincipal,
+                    new AuthenticationProperties
+                    {
+                        IsPersistent = true,
+                        ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7)
+                    });
+
+                // Create WiFi session record
+                if (!string.IsNullOrEmpty(macAddress))
+                    await CreateWifiSessionAsync(guest, macAddress, "MikrotikExternal");
+
+                // REDIRECT TO MIKROTIK - This is the KEY!
+                // MikroTik will authenticate via RADIUS and grant internet access
+                return Redirect(mikrotikLoginUrl);
+            }
+
+            // ============================================
+            // RADIUS AUTHENTICATION (for non-MikroTik controllers)
+            // Send Access-Request to FreeRADIUS
             // ============================================
             var radiusResult = await AuthenticateViaRadiusAsync(model.RoomNumber, model.Password, clientIp, macAddress);
-            
+
             if (radiusResult.Success)
             {
                 _logger.LogInformation("=== RADIUS Authentication SUCCESS ===");
-                
+
                 // Create authentication cookie
                 var principal = _authService.CreateGuestPrincipal(guest);
                 await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal,
@@ -239,7 +293,7 @@ namespace HotelWifiPortal.Controllers.Portal
             {
                 _logger.LogWarning("=== RADIUS Authentication FAILED ===");
                 _logger.LogWarning("Error: {Error}", radiusResult.Error);
-                
+
                 // Still create local session, but user may not have internet
                 var principal = _authService.CreateGuestPrincipal(guest);
                 await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal,
@@ -257,29 +311,119 @@ namespace HotelWifiPortal.Controllers.Portal
             _logger.LogInformation("UAM IP: {UamIp}", uamIp);
             _logger.LogInformation("UAM Port: {UamPort}", uamPort);
 
-            // Try Ruckus WISPr authentication first
-            var wisprResult = await TryRuckusWisprAuthAsync(model.RoomNumber, model.Password);
-            if (wisprResult != null)
+            // Detect which controller is being used based on parameters and settings
+            var activeController = await DetectActiveControllerAsync(linkLogin, uamIp);
+            _logger.LogInformation("Detected active controller: {Controller}", activeController);
+
+            // Handle based on controller type
+            switch (activeController)
             {
-                // Create WiFi session record
-                if (!string.IsNullOrEmpty(macAddress))
-                    await CreateWifiSessionAsync(guest, macAddress, "RuckusWISPr");
-                return wisprResult;
+                case "Mikrotik":
+                    // MikroTik External Portal Flow
+                    // The KEY is to redirect back to MikroTik's link-login URL with credentials
+                    // MikroTik will then authenticate via RADIUS and grant access
+
+                    if (!string.IsNullOrEmpty(linkLogin))
+                    {
+                        _logger.LogInformation("=== MikroTik External Portal Redirect ===");
+                        _logger.LogInformation("Link-Login: {LinkLogin}", linkLogin);
+
+                        // Build the redirect URL back to MikroTik
+                        // MikroTik expects: link-login?username=XXX&password=XXX
+                        var mikrotikLoginUrl = linkLogin;
+
+                        // Add credentials to the URL
+                        if (mikrotikLoginUrl.Contains("?"))
+                        {
+                            mikrotikLoginUrl += $"&username={Uri.EscapeDataString(model.RoomNumber)}&password={Uri.EscapeDataString(model.Password)}";
+                        }
+                        else
+                        {
+                            mikrotikLoginUrl += $"?username={Uri.EscapeDataString(model.RoomNumber)}&password={Uri.EscapeDataString(model.Password)}";
+                        }
+
+                        // Add destination if we have it
+                        if (!string.IsNullOrEmpty(linkOrig))
+                        {
+                            mikrotikLoginUrl += $"&dst={Uri.EscapeDataString(linkOrig)}";
+                        }
+
+                        _logger.LogInformation("Redirecting to MikroTik: {Url}", mikrotikLoginUrl);
+
+                        // Create WiFi session record
+                        if (!string.IsNullOrEmpty(macAddress))
+                            await CreateWifiSessionAsync(guest, macAddress, "MikrotikExternal");
+
+                        // Redirect back to MikroTik - this is the KEY!
+                        // MikroTik will authenticate via RADIUS and grant internet access
+                        return Redirect(mikrotikLoginUrl);
+                    }
+                    else
+                    {
+                        // No link-login - try API-based authentication
+                        _logger.LogWarning("No link-login URL, trying API-based auth");
+
+                        if (!string.IsNullOrEmpty(macAddress) && !string.IsNullOrEmpty(clientIp))
+                        {
+                            var authMethod = await _dbContext.SystemSettings
+                                .Where(s => s.Key == "MikrotikAuthMethod")
+                                .Select(s => s.Value)
+                                .FirstOrDefaultAsync() ?? "MacBinding";
+
+                            var mikrotikResult = await _mikrotikAuth.AuthenticateGuestAsync(
+                                guest,
+                                clientIp,
+                                macAddress,
+                                linkLogin,
+                                authMethod);
+
+                            if (mikrotikResult.Success)
+                            {
+                                _logger.LogInformation("=== MikroTik API Authentication SUCCESS ===");
+                                _logger.LogInformation("Method: {Method}", mikrotikResult.Method);
+
+                                await CreateWifiSessionAsync(guest, macAddress, mikrotikResult.Method);
+                                return RedirectToAction(nameof(Success), new { returnUrl = linkOrig });
+                            }
+                            else
+                            {
+                                _logger.LogWarning("MikroTik API auth failed: {Error}", mikrotikResult.Error);
+                                TempData["Warning"] = $"WiFi authentication issue: {mikrotikResult.Error}";
+                            }
+                        }
+                    }
+                    break;
+
+                case "RuckusZD":
+                    // Ruckus flow - WISPr redirect
+                    var wisprResult = await TryRuckusWisprAuthAsync(model.RoomNumber, model.Password);
+                    if (wisprResult != null)
+                    {
+                        if (!string.IsNullOrEmpty(macAddress))
+                            await CreateWifiSessionAsync(guest, macAddress, "RuckusWISPr");
+                        return wisprResult;
+                    }
+                    break;
+
+                case "RADIUS":
+                default:
+                    // RADIUS-only mode - already authenticated above
+                    // Just redirect to success
+                    break;
             }
 
-            // Fallback: Authenticate with MikroTik using comprehensive service
-            if (!string.IsNullOrEmpty(macAddress) && !string.IsNullOrEmpty(clientIp))
+            // Fallback: Try MikroTik if we have MAC/IP (backward compatibility)
+            if (!string.IsNullOrEmpty(macAddress) && !string.IsNullOrEmpty(clientIp) && activeController != "Mikrotik")
             {
-                // Get preferred auth method from settings
                 var authMethod = await _dbContext.SystemSettings
                     .Where(s => s.Key == "MikrotikAuthMethod")
                     .Select(s => s.Value)
                     .FirstOrDefaultAsync();
-                
+
                 var authResult = await _mikrotikAuth.AuthenticateGuestAsync(
-                    guest, 
-                    clientIp, 
-                    macAddress, 
+                    guest,
+                    clientIp,
+                    macAddress,
                     linkLogin,
                     authMethod);
 
@@ -312,7 +456,7 @@ namespace HotelWifiPortal.Controllers.Portal
                         {
                             // URL decode if needed
                             redirectUrl = System.Net.WebUtility.UrlDecode(redirectUrl);
-                            
+
                             // Skip if it's a portal/login URL or invalid
                             if (redirectUrl.Contains("/portal", StringComparison.OrdinalIgnoreCase) ||
                                 redirectUrl.Contains("/login", StringComparison.OrdinalIgnoreCase) ||
@@ -327,7 +471,7 @@ namespace HotelWifiPortal.Controllers.Portal
                             redirectUrl = null;
                         }
                     }
-                    
+
                     // Redirect to success page - guest now has internet access
                     return RedirectToAction(nameof(Success), new { returnUrl = redirectUrl });
                 }
@@ -335,7 +479,7 @@ namespace HotelWifiPortal.Controllers.Portal
                 {
                     _logger.LogWarning("=== WiFi Authentication FAILED ===");
                     _logger.LogWarning("Method: {Method}, Error: {Error}", authResult.Method, authResult.Error);
-                    
+
                     // Still allow dashboard access but warn user
                     TempData["Warning"] = "WiFi authentication had issues. You may need to reconnect to the network.";
                 }
@@ -353,13 +497,59 @@ namespace HotelWifiPortal.Controllers.Portal
         }
 
         /// <summary>
+        /// Detect which WiFi controller is active based on parameters and settings
+        /// </summary>
+        private async Task<string> DetectActiveControllerAsync(string? linkLogin, string? uamIp)
+        {
+            // Check for MikroTik-specific parameters
+            if (!string.IsNullOrEmpty(linkLogin) && linkLogin.Contains("/login"))
+            {
+                _logger.LogDebug("Detected MikroTik from link-login parameter");
+                return "Mikrotik";
+            }
+
+            // Check for Ruckus-specific parameters
+            if (!string.IsNullOrEmpty(uamIp))
+            {
+                _logger.LogDebug("Detected RuckusZD from uamip parameter");
+                return "RuckusZD";
+            }
+
+            // Check what controllers are enabled in the database
+            var enabledControllers = await _dbContext.WifiControllerSettings
+                .Where(c => c.IsEnabled)
+                .Select(c => new { c.ControllerType, c.IsDefault })
+                .ToListAsync();
+
+            // Return the default controller if one is set
+            var defaultController = enabledControllers.FirstOrDefault(c => c.IsDefault);
+            if (defaultController != null)
+            {
+                _logger.LogDebug("Using default controller: {Controller}", defaultController.ControllerType);
+                return defaultController.ControllerType;
+            }
+
+            // Return the first enabled controller
+            var firstEnabled = enabledControllers.FirstOrDefault();
+            if (firstEnabled != null)
+            {
+                _logger.LogDebug("Using first enabled controller: {Controller}", firstEnabled.ControllerType);
+                return firstEnabled.ControllerType;
+            }
+
+            // Default to RADIUS-only mode
+            _logger.LogDebug("No controller configured, using RADIUS-only mode");
+            return "RADIUS";
+        }
+
+        /// <summary>
         /// Authenticate user via RADIUS - sends Access-Request to FreeRADIUS
         /// This is the key method that tells the network the user is authenticated!
         /// </summary>
         private async Task<RadiusAuthResult> AuthenticateViaRadiusAsync(
-            string username, 
-            string password, 
-            string? clientIp, 
+            string username,
+            string password,
+            string? clientIp,
             string? clientMac)
         {
             try
@@ -374,7 +564,7 @@ namespace HotelWifiPortal.Controllers.Portal
                     .Where(s => s.Key == "FreeRadiusAuthPort" || s.Key == "RadiusAuthPort")
                     .Select(s => s.Value)
                     .FirstOrDefaultAsync() ?? "1812";
-                
+
                 var radiusPort = int.TryParse(radiusPortStr, out var port) ? port : 1812;
 
                 var radiusSecret = await _dbContext.SystemSettings
@@ -397,16 +587,16 @@ namespace HotelWifiPortal.Controllers.Portal
                 if (radiusEnabled?.ToLower() != "true")
                 {
                     _logger.LogWarning("FreeRADIUS is not enabled in settings");
-                    return new RadiusAuthResult 
-                    { 
-                        Success = false, 
-                        Error = "RADIUS authentication is not enabled. Enable it in Admin > Settings > RADIUS." 
+                    return new RadiusAuthResult
+                    {
+                        Success = false,
+                        Error = "RADIUS authentication is not enabled. Enable it in Admin > Settings > RADIUS."
                     };
                 }
 
                 // Create RADIUS client
                 var loggerFactory = HttpContext.RequestServices.GetService<ILoggerFactory>();
-                var radiusLogger = loggerFactory?.CreateLogger<RadiusClient>() 
+                var radiusLogger = loggerFactory?.CreateLogger<RadiusClient>()
                     ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<RadiusClient>.Instance;
 
                 var radiusClient = new RadiusClient(
@@ -468,7 +658,7 @@ namespace HotelWifiPortal.Controllers.Portal
                     var loginUrl = $"http://{uamIp}:{uamPort}/login?" +
                         $"username={Uri.EscapeDataString(username)}&" +
                         $"password={Uri.EscapeDataString(password)}";
-                    
+
                     if (!string.IsNullOrEmpty(userUrl))
                     {
                         loginUrl += $"&userurl={Uri.EscapeDataString(userUrl)}";
@@ -516,7 +706,7 @@ namespace HotelWifiPortal.Controllers.Portal
 
                 var httpClientFactory = HttpContext.RequestServices.GetService<IHttpClientFactory>();
                 var logger = HttpContext.RequestServices.GetService<ILogger<RuckusZoneDirectorController>>();
-                
+
                 if (httpClientFactory == null || logger == null)
                     return null;
 
@@ -554,7 +744,7 @@ namespace HotelWifiPortal.Controllers.Portal
                 _dbContext.WifiSessions.Add(session);
                 guest.LastWifiLogin = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
-                
+
                 _logger.LogInformation("WiFi session created: SessionId={Id}", session.Id);
             }
             catch (Exception ex)
@@ -587,8 +777,8 @@ namespace HotelWifiPortal.Controllers.Portal
                 UsedQuotaGB = guest.UsedQuotaGB,
                 TotalQuotaGB = guest.TotalQuotaGB,
                 RemainingQuotaGB = guest.RemainingQuotaGB,
-                UsagePercentage = guest.TotalQuotaBytes > 0 
-                    ? (int)((guest.UsedQuotaBytes * 100) / guest.TotalQuotaBytes) 
+                UsagePercentage = guest.TotalQuotaBytes > 0
+                    ? (int)((guest.UsedQuotaBytes * 100) / guest.TotalQuotaBytes)
                     : 0,
                 IsQuotaExhausted = guest.IsQuotaExhausted,
                 ActiveSessions = activeSessions.Where(s => s.Status == "Active").ToList(),
@@ -676,7 +866,7 @@ namespace HotelWifiPortal.Controllers.Portal
         public async Task<IActionResult> Usage()
         {
             var guestId = int.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "0");
-            
+
             var sessions = await _dbContext.WifiSessions
                 .Where(s => s.GuestId == guestId)
                 .OrderByDescending(s => s.SessionStart)
@@ -706,14 +896,14 @@ namespace HotelWifiPortal.Controllers.Portal
             _logger.LogInformation("=== Success Page ===");
             _logger.LogInformation("Return URL: {Url}", returnUrl ?? "none");
             _logger.LogInformation("User authenticated: {Auth}", User.Identity?.IsAuthenticated);
-            
+
             // Clean up and validate return URL
             if (!string.IsNullOrEmpty(returnUrl))
             {
                 try
                 {
                     returnUrl = System.Net.WebUtility.UrlDecode(returnUrl);
-                    
+
                     // Only use valid external URLs
                     if (Uri.TryCreate(returnUrl, UriKind.Absolute, out var uri) &&
                         (uri.Scheme == "http" || uri.Scheme == "https") &&
@@ -749,7 +939,7 @@ namespace HotelWifiPortal.Controllers.Portal
         {
             var mac = HttpContext.Session.GetString("MacAddress");
             var isAuthenticated = User.Identity?.IsAuthenticated == true;
-            
+
             Guest? guest = null;
             if (isAuthenticated)
             {
