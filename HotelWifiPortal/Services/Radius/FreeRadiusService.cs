@@ -364,7 +364,19 @@ namespace HotelWifiPortal.Services.Radius
         /// </summary>
         public async Task SyncAccountingToGuestsAsync()
         {
-            if (!_isEnabled) return;
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled)
+            {
+                _logger.LogWarning("FreeRADIUS is not enabled, skipping accounting sync");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(_connectionString))
+            {
+                _logger.LogWarning("FreeRADIUS connection string is empty, skipping accounting sync");
+                return;
+            }
 
             try
             {
@@ -372,23 +384,60 @@ namespace HotelWifiPortal.Services.Radius
                 var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
                 var guests = await dbContext.Guests
-                    .Where(g => g.Status == "checked-in")
+                    .Where(g => g.Status.ToLower() == "checked-in" ||
+                               g.Status.ToLower() == "checkedin" ||
+                               g.Status == "CheckedIn")
                     .ToListAsync();
+
+                _logger.LogInformation("Syncing accounting for {Count} checked-in guests", guests.Count);
+
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
 
                 foreach (var guest in guests)
                 {
-                    var acctData = await GetAccountingDataAsync(guest.RoomNumber);
-                    if (acctData != null)
+                    try
                     {
-                        var totalBytes = acctData.TotalInputOctets + acctData.TotalOutputOctets;
-                        if (totalBytes > guest.UsedQuotaBytes)
+                        // Query by room number directly
+                        var sql = $@"
+                            SELECT 
+                                COALESCE(SUM(acctinputoctets), 0) + 
+                                COALESCE(SUM(CAST(COALESCE(acctinputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_input,
+                                COALESCE(SUM(acctoutputoctets), 0) + 
+                                COALESCE(SUM(CAST(COALESCE(acctoutputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_output
+                            FROM {_tablePrefix}acct 
+                            WHERE username = @username";
+
+                        using var cmd = new MySqlCommand(sql, connection);
+                        cmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+
+                        using var reader = await cmd.ExecuteReaderAsync();
+                        if (await reader.ReadAsync())
                         {
-                            guest.UsedQuotaBytes = totalBytes;
+                            var inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                            var outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                            var totalBytes = inputBytes + outputBytes;
+
+                            if (totalBytes > 0)
+                            {
+                                _logger.LogInformation("Guest Room={Room}: Usage={Total}MB (In={In}MB, Out={Out}MB)",
+                                    guest.RoomNumber, totalBytes / 1048576.0, inputBytes / 1048576.0, outputBytes / 1048576.0);
+
+                                if (totalBytes > guest.UsedQuotaBytes)
+                                {
+                                    guest.UsedQuotaBytes = totalBytes;
+                                }
+                            }
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error getting accounting for guest {Room}", guest.RoomNumber);
                     }
                 }
 
                 await dbContext.SaveChangesAsync();
+                _logger.LogInformation("Accounting sync completed");
             }
             catch (Exception ex)
             {

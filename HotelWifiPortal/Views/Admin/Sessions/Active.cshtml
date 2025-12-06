@@ -7,9 +7,12 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-broadcast me-2"></i>Active WiFi Sessions</h2>
     <div>
-        <a asp-action="RefreshUsage" class="btn btn-outline-primary">
-            <i class="bi bi-arrow-clockwise me-2"></i>Refresh All Usage
-        </a>
+        <form asp-action="RefreshUsage" method="post" class="d-inline">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-outline-primary">
+                <i class="bi bi-arrow-clockwise me-2"></i>Refresh All Usage
+            </button>
+        </form>
         <a asp-action="Index" class="btn btn-outline-secondary">
             <i class="bi bi-list me-2"></i>All Sessions
         </a>

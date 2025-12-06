@@ -173,8 +173,19 @@ namespace HotelWifiPortal.Services.WiFi
         public async Task UpdateSessionUsageAsync()
         {
             var activeSessions = await GetActiveSessionsAsync();
-            var controller = await GetDefaultControllerAsync();
 
+            // First, try to sync from FreeRADIUS if enabled
+            bool freeRadiusSynced = await SyncFromFreeRadiusAsync(activeSessions);
+
+            // If FreeRADIUS sync worked, we're done
+            if (freeRadiusSynced)
+            {
+                await _dbContext.SaveChangesAsync();
+                return;
+            }
+
+            // Otherwise, try to get usage from WiFi controller directly
+            var controller = await GetDefaultControllerAsync();
             if (controller == null) return;
 
             foreach (var session in activeSessions)
@@ -214,6 +225,152 @@ namespace HotelWifiPortal.Services.WiFi
             }
 
             await _dbContext.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Sync usage data from FreeRADIUS radacct table
+        /// </summary>
+        private async Task<bool> SyncFromFreeRadiusAsync(List<WifiSession> activeSessions)
+        {
+            try
+            {
+                // Check if FreeRADIUS is enabled
+                var freeRadiusEnabled = await _dbContext.SystemSettings
+                    .Where(s => s.Key == "FreeRadiusEnabled")
+                    .Select(s => s.Value)
+                    .FirstOrDefaultAsync();
+
+                if (freeRadiusEnabled?.ToLower() != "true")
+                    return false;
+
+                var connectionString = await _dbContext.SystemSettings
+                    .Where(s => s.Key == "FreeRadiusConnectionString")
+                    .Select(s => s.Value)
+                    .FirstOrDefaultAsync();
+
+                if (string.IsNullOrEmpty(connectionString))
+                    return false;
+
+                var tablePrefix = await _dbContext.SystemSettings
+                    .Where(s => s.Key == "FreeRadiusTablePrefix")
+                    .Select(s => s.Value)
+                    .FirstOrDefaultAsync() ?? "rad";
+
+                _logger.LogInformation("Syncing usage from FreeRADIUS for {Count} active sessions...", activeSessions.Count);
+
+                using var connection = new MySqlConnector.MySqlConnection(connectionString);
+                await connection.OpenAsync();
+
+                foreach (var session in activeSessions)
+                {
+                    try
+                    {
+                        // Normalize MAC address to different formats for matching
+                        var macClean = session.MacAddress?.ToLower().Replace(":", "").Replace("-", "") ?? "";
+                        var macWithColons = session.MacAddress?.ToUpper() ?? "";
+                        var macWithDashes = session.MacAddress?.ToUpper().Replace(":", "-") ?? "";
+
+                        _logger.LogDebug("Querying for Room={Room}, MAC formats: clean={Clean}, colons={Colons}, dashes={Dashes}",
+                            session.RoomNumber, macClean, macWithColons, macWithDashes);
+
+                        // Query radacct for this session's usage
+                        // Match by username (room number) OR various MAC address formats
+                        var sql = $@"
+                            SELECT 
+                                COALESCE(SUM(acctinputoctets), 0) + 
+                                COALESCE(SUM(CAST(COALESCE(acctinputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_input,
+                                COALESCE(SUM(acctoutputoctets), 0) + 
+                                COALESCE(SUM(CAST(COALESCE(acctoutputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_output,
+                                MAX(acctstarttime) as last_start,
+                                MAX(acctstoptime) as last_stop
+                            FROM {tablePrefix}acct 
+                            WHERE username = @username 
+                               OR username = @macClean
+                               OR username = @macWithColons
+                               OR username = @macWithDashes
+                               OR callingstationid = @macClean
+                               OR callingstationid = @macWithColons
+                               OR callingstationid = @macWithDashes
+                               OR LOWER(REPLACE(REPLACE(callingstationid, ':', ''), '-', '')) = @macClean";
+
+                        using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                        cmd.Parameters.AddWithValue("@username", session.RoomNumber);
+                        cmd.Parameters.AddWithValue("@macClean", macClean);
+                        cmd.Parameters.AddWithValue("@macWithColons", macWithColons);
+                        cmd.Parameters.AddWithValue("@macWithDashes", macWithDashes);
+
+                        using var reader = await cmd.ExecuteReaderAsync();
+                        if (await reader.ReadAsync())
+                        {
+                            var inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                            var outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                            var totalBytes = inputBytes + outputBytes;
+
+                            _logger.LogInformation("Found usage for Room={Room}: Input={Input}MB, Output={Output}MB, Total={Total}MB",
+                                session.RoomNumber, inputBytes / 1048576.0, outputBytes / 1048576.0, totalBytes / 1048576.0);
+
+                            if (totalBytes > 0)
+                            {
+                                // Update session - mark as modified to ensure EF tracks it
+                                session.BytesDownloaded = inputBytes;
+                                session.BytesUploaded = outputBytes;
+                                session.BytesUsed = totalBytes;
+                                session.LastActivity = DateTime.UtcNow;
+                                _dbContext.Entry(session).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
+
+                                _logger.LogInformation("Updated session {Id} for Room={Room}: BytesUsed={Total}",
+                                    session.Id, session.RoomNumber, totalBytes);
+
+                                // Update guest usage directly
+                                if (session.GuestId > 0)
+                                {
+                                    var guest = await _dbContext.Guests.FindAsync(session.GuestId);
+                                    if (guest != null)
+                                    {
+                                        var oldUsage = guest.UsedQuotaBytes;
+                                        guest.UsedQuotaBytes = Math.Max(guest.UsedQuotaBytes, totalBytes);
+                                        _dbContext.Entry(guest).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
+
+                                        _logger.LogInformation("Updated guest {GuestId} Room={Room}: Usage {Old}MB -> {New}MB",
+                                            guest.Id, guest.RoomNumber, oldUsage / 1048576.0, guest.UsedQuotaBytes / 1048576.0);
+                                    }
+                                    else
+                                    {
+                                        _logger.LogWarning("Guest not found for GuestId={GuestId}", session.GuestId);
+                                    }
+                                }
+                                else
+                                {
+                                    _logger.LogWarning("Session has no GuestId, skipping guest update");
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogDebug("No usage found in radacct for Room={Room}", session.RoomNumber);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogDebug("No radacct records found for Room={Room}", session.RoomNumber);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error syncing usage for session {Room}", session.RoomNumber);
+                    }
+                }
+
+                // Save all changes
+                var changes = await _dbContext.SaveChangesAsync();
+                _logger.LogInformation("Saved {Changes} changes to database", changes);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing from FreeRADIUS");
+                return false;
+            }
         }
 
         public async Task<BandwidthProfile?> GetBandwidthProfileForGuestAsync(Guest guest)

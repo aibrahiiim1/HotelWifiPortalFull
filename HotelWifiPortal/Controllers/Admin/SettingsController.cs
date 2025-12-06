@@ -1758,6 +1758,52 @@ namespace HotelWifiPortal.Controllers.Admin
         }
 
         /// <summary>
+        /// Sync accounting data from FreeRADIUS radacct table to update guest usage
+        /// </summary>
+        [HttpPost]
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> FreeRadiusSyncAccounting()
+        {
+            try
+            {
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
+                var wifiService = scope.ServiceProvider.GetRequiredService<WifiService>();
+
+                // Force reload configuration from database
+                await freeRadiusService.LoadConfigurationFromDatabaseAsync();
+
+                // Sync accounting data from FreeRADIUS to guests
+                await freeRadiusService.SyncAccountingToGuestsAsync();
+
+                // Also update session usage
+                await wifiService.UpdateSessionUsageAsync();
+
+                // Get updated stats
+                var totalGuests = await _dbContext.Guests.Where(g => g.Status.ToLower() == "checked-in").CountAsync();
+                var totalUsageGB = await _dbContext.Guests.SumAsync(g => g.UsedQuotaBytes) / 1073741824.0;
+                var activeSessions = await _dbContext.WifiSessions.CountAsync(s => s.Status == "Active");
+
+                return Json(new
+                {
+                    success = true,
+                    message = $"Accounting synced successfully",
+                    stats = new
+                    {
+                        guests = totalGuests,
+                        totalUsageGB = totalUsageGB.ToString("N2"),
+                        activeSessions = activeSessions
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing accounting from FreeRADIUS");
+                return Json(new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// Initialize FreeRADIUS database
         /// </summary>
         [HttpPost]
@@ -1869,6 +1915,122 @@ namespace HotelWifiPortal.Controllers.Admin
             }
             catch (Exception ex)
             {
+                return Json(new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get accounting data from radacct table for debugging
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> FreeRadiusGetAccounting()
+        {
+            try
+            {
+                var settings = await _dbContext.SystemSettings.ToListAsync();
+                var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                if (string.IsNullOrEmpty(connStr))
+                    return Json(new { success = false, message = "FreeRADIUS connection string not configured" });
+
+                var records = new List<object>();
+                using var connection = new MySqlConnector.MySqlConnection(connStr);
+                await connection.OpenAsync();
+
+                // Get accounting summary grouped by username
+                using var cmd = new MySqlConnector.MySqlCommand($@"
+                    SELECT 
+                        username,
+                        COUNT(*) as session_count,
+                        SUM(acctinputoctets) as total_input,
+                        SUM(acctoutputoctets) as total_output,
+                        MAX(acctstarttime) as last_session,
+                        MAX(acctstoptime) as last_stop
+                    FROM {prefix}acct 
+                    GROUP BY username
+                    ORDER BY last_session DESC
+                    LIMIT 50", connection);
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var inputBytes = reader.IsDBNull(reader.GetOrdinal("total_input")) ? 0L : reader.GetInt64("total_input");
+                    var outputBytes = reader.IsDBNull(reader.GetOrdinal("total_output")) ? 0L : reader.GetInt64("total_output");
+
+                    records.Add(new
+                    {
+                        username = reader.GetString("username"),
+                        sessionCount = reader.GetInt32("session_count"),
+                        inputMB = (inputBytes / 1048576.0).ToString("N2"),
+                        outputMB = (outputBytes / 1048576.0).ToString("N2"),
+                        totalMB = ((inputBytes + outputBytes) / 1048576.0).ToString("N2"),
+                        lastSession = reader.IsDBNull(reader.GetOrdinal("last_session")) ? "N/A" : reader.GetDateTime("last_session").ToString("yyyy-MM-dd HH:mm"),
+                        isActive = reader.IsDBNull(reader.GetOrdinal("last_stop"))
+                    });
+                }
+
+                // Also get app's active sessions for comparison
+                var appSessions = await _dbContext.WifiSessions
+                    .Where(s => s.Status == "Active")
+                    .Select(s => new {
+                        s.Id,
+                        s.RoomNumber,
+                        s.MacAddress,
+                        s.GuestId,
+                        s.Status,
+                        s.BytesUsed,
+                        s.BytesDownloaded,
+                        s.BytesUploaded
+                    })
+                    .ToListAsync();
+
+                // And checked-in guests
+                var guests = await _dbContext.Guests
+                    .Where(g => g.Status.ToLower() == "checked-in" || g.Status.ToLower() == "checkedin")
+                    .Select(g => new {
+                        g.Id,
+                        g.RoomNumber,
+                        g.Status,
+                        g.UsedQuotaBytes,
+                        g.TotalQuotaBytes
+                    })
+                    .ToListAsync();
+
+                return Json(new
+                {
+                    success = true,
+                    radacctRecords = records,
+                    appSessions = appSessions.Select(s => new {
+                        s.Id,
+                        s.RoomNumber,
+                        s.MacAddress,
+                        s.GuestId,
+                        s.Status,
+                        usageMB = (s.BytesUsed / 1048576.0).ToString("N2"),
+                        downloadMB = (s.BytesDownloaded / 1048576.0).ToString("N2"),
+                        uploadMB = (s.BytesUploaded / 1048576.0).ToString("N2")
+                    }),
+                    guests = guests.Select(g => new {
+                        g.Id,
+                        g.RoomNumber,
+                        g.Status,
+                        usageMB = (g.UsedQuotaBytes / 1048576.0).ToString("N2"),
+                        quotaMB = (g.TotalQuotaBytes / 1048576.0).ToString("N2")
+                    }),
+                    troubleshooting = new
+                    {
+                        tip1 = "For sync to work: radacct.username must match WifiSession.RoomNumber",
+                        tip2 = "Session must have Status='Active' to be synced",
+                        tip3 = "Session must have valid GuestId > 0 to update guest usage",
+                        tip4 = "Guest must be 'checked-in' status"
+                    },
+                    message = $"Found {records.Count} usernames in radacct, {appSessions.Count} active sessions, {guests.Count} checked-in guests"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting accounting data");
                 return Json(new { success = false, message = ex.Message });
             }
         }

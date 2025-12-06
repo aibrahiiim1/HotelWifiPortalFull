@@ -102,6 +102,7 @@
                             <button class="btn btn-outline-primary" onclick="initializeDatabase()"><i class="bi bi-database-add me-2"></i>Initialize Database</button>
                             <button class="btn btn-outline-success" onclick="syncAllUsers()"><i class="bi bi-arrow-repeat me-2"></i>Sync All Guests</button>
                             <button class="btn btn-outline-info" onclick="syncBandwidthProfiles()"><i class="bi bi-speedometer me-2"></i>Sync Profiles</button>
+                            <button class="btn btn-outline-secondary" onclick="syncAccounting()"><i class="bi bi-graph-up me-2"></i>Sync Usage Data</button>
                             <button class="btn btn-outline-warning" onclick="cleanupOldUsers()"><i class="bi bi-trash me-2"></i>Cleanup</button>
                         </div>
                         <div id="actionResult" class="mt-3"></div>
@@ -315,6 +316,7 @@ function clearResponse() { document.getElementById('radiusResponse').innerHTML='
 
 async function syncAllUsers() { await doAction('FreeRadiusSyncUsers','Syncing...'); }
 async function syncBandwidthProfiles() { await doAction('FreeRadiusSyncProfiles','Syncing...'); }
+async function syncAccounting() { await doAction('FreeRadiusSyncAccounting','Syncing usage data...'); }
 async function initializeDatabase() { if(confirm('Create tables?')) await doAction('FreeRadiusInitDatabase','Initializing...'); }
 async function cleanupOldUsers() { await doAction('FreeRadiusCleanup','Cleaning...'); }
 async function doAction(endpoint, msg) { const r=document.getElementById('actionResult'); r.innerHTML=`<div class="spinner-border spinner-border-sm"></div> ${msg}`; try{const res=await fetch(`${apiBase}/${endpoint}`,{method:'POST'});const data=await res.json();r.innerHTML=`<div class="alert alert-${data.success?'success':'danger'} py-2 mb-0">${data.message}</div>`;if(data.success)showNotification('Success',data.message,'success');}catch(err){r.innerHTML=`<div class="alert alert-danger py-2 mb-0">${err.message}</div>`;} }

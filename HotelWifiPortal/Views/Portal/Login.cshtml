@@ -141,13 +141,12 @@
                 </div>
             }
             
-            <!-- Debug info (hidden by default, can be shown for troubleshooting) -->
-            <div class="debug-info mt-3 small text-muted" style="display: none;">
-                <hr>
+            <!-- Debug info (visible for troubleshooting) -->
+            <div class="debug-info mt-3 small text-muted" style="background:#f8f9fa; padding:10px; border-radius:5px;">
                 <p class="mb-1"><strong>Debug Info:</strong></p>
                 <p class="mb-0">MAC: @(Model.MacAddress ?? "Not detected")</p>
                 <p class="mb-0">IP: @(Model.ClientIp ?? "Not detected")</p>
-                <p class="mb-0">Link-Login: @(Model.LinkLogin ?? "None")</p>
+                <p class="mb-0">Link-Login: <code>@(Model.LinkLogin ?? "None")</code></p>
                 <p class="mb-0">Return URL: @(Model.ReturnUrl ?? "None")</p>
             </div>
         </div>

@@ -60,7 +60,9 @@ namespace HotelWifiPortal.Controllers.Portal
             [FromQuery(Name = "link-login")] string? linkLogin,      // MikroTik login URL
             [FromQuery(Name = "link-orig")] string? linkOrig,        // Original destination
             [FromQuery(Name = "link-login-only")] string? linkLoginOnly,
-            // Ruckus ZoneDirector WISPr parameters
+            [FromQuery(Name = "linklogin")] string? linkLoginAlt,    // Alternative without hyphen
+            [FromQuery(Name = "linkorig")] string? linkOrigAlt,      // Alternative without hyphen
+                                                                     // Ruckus ZoneDirector WISPr parameters
             [FromQuery(Name = "client_mac")] string? clientMac,      // Ruckus client MAC
             [FromQuery(Name = "client_ip")] string? clientIp,        // Ruckus client IP
             [FromQuery(Name = "uamip")] string? uamIp,               // Ruckus controller IP
@@ -72,10 +74,11 @@ namespace HotelWifiPortal.Controllers.Portal
             [FromQuery(Name = "challenge")] string? challenge,       // WISPr challenge
             string? error)         // Error from previous attempt
         {
-            // Normalize parameters - prefer Ruckus format if available
+            // Normalize parameters - use alternative names if primary is empty
             var macAddress = mac ?? clientMac;
             var clientIpAddress = ip ?? clientIp ?? sip;
-            var originalUrl = url ?? linkOrig ?? userUrl;
+            var originalUrl = url ?? linkOrig ?? linkOrigAlt ?? userUrl;
+            var effectiveLinkLogin = linkLogin ?? linkLoginAlt ?? linkLoginOnly;
 
             // Log all incoming parameters for debugging
             _logger.LogInformation("=== Portal Access ===");
@@ -84,7 +87,7 @@ namespace HotelWifiPortal.Controllers.Portal
             _logger.LogInformation("Username: {Username}", username ?? "none");
             _logger.LogInformation("URL/Dst: {Url}", originalUrl ?? "none");
             _logger.LogInformation("SSID: {Ssid}", ssid ?? "none");
-            _logger.LogInformation("Link-Login: {LinkLogin}", linkLogin ?? "none");
+            _logger.LogInformation("Link-Login: {LinkLogin}", effectiveLinkLogin ?? "none");
             _logger.LogInformation("UAM IP: {UamIp}", uamIp ?? "none");
             _logger.LogInformation("Challenge: {Challenge}", challenge ?? "none");
             _logger.LogInformation("Error: {Error}", error ?? "none");
@@ -96,8 +99,8 @@ namespace HotelWifiPortal.Controllers.Portal
                 HttpContext.Session.SetString("MacAddress", macAddress);
             if (!string.IsNullOrEmpty(clientIpAddress))
                 HttpContext.Session.SetString("ClientIp", clientIpAddress);
-            if (!string.IsNullOrEmpty(linkLogin))
-                HttpContext.Session.SetString("LinkLogin", linkLogin);
+            if (!string.IsNullOrEmpty(effectiveLinkLogin))
+                HttpContext.Session.SetString("LinkLogin", effectiveLinkLogin);
             if (!string.IsNullOrEmpty(originalUrl))
             {
                 HttpContext.Session.SetString("LinkOrig", originalUrl);
@@ -138,8 +141,8 @@ namespace HotelWifiPortal.Controllers.Portal
                 MacAddress = macAddress,
                 ClientIp = clientIpAddress ?? Request.HttpContext.Connection.RemoteIpAddress?.ToString(),
                 ReturnUrl = originalUrl,
-                LinkLogin = linkLogin,
-                LinkOrig = linkOrig ?? originalUrl
+                LinkLogin = effectiveLinkLogin,
+                LinkOrig = originalUrl
             };
 
             _logger.LogInformation("Model LinkLogin: {LinkLogin}", model.LinkLogin ?? "null");
@@ -155,8 +158,11 @@ namespace HotelWifiPortal.Controllers.Portal
         {
             _logger.LogInformation("=== Login Attempt ===");
             _logger.LogInformation("Room: {Room}", model.RoomNumber);
-            _logger.LogInformation("MAC: {Mac}", model.MacAddress ?? HttpContext.Session.GetString("MacAddress"));
-            _logger.LogInformation("IP: {Ip}", model.ClientIp ?? HttpContext.Session.GetString("ClientIp"));
+            _logger.LogInformation("Model.MacAddress: {Mac}", model.MacAddress ?? "null");
+            _logger.LogInformation("Model.LinkLogin: {LinkLogin}", model.LinkLogin ?? "null");
+            _logger.LogInformation("Model.LinkOrig: {LinkOrig}", model.LinkOrig ?? "null");
+            _logger.LogInformation("Session.MacAddress: {Mac}", HttpContext.Session.GetString("MacAddress") ?? "null");
+            _logger.LogInformation("Session.LinkLogin: {LinkLogin}", HttpContext.Session.GetString("LinkLogin") ?? "null");
 
             if (!ModelState.IsValid)
             {
@@ -182,6 +188,19 @@ namespace HotelWifiPortal.Controllers.Portal
                         var localPrincipal = _authService.CreateLocalUserPrincipal(localUser);
                         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, localPrincipal,
                             new AuthenticationProperties { IsPersistent = true, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7) });
+
+                        // Check for MikroTik redirect for local users too
+                        var localLinkLogin = model.LinkLogin ?? HttpContext.Session.GetString("LinkLogin");
+                        if (!string.IsNullOrEmpty(localLinkLogin))
+                        {
+                            _logger.LogInformation("Local user - redirecting to MikroTik: {LinkLogin}", localLinkLogin);
+                            var localMikrotikUrl = localLinkLogin;
+                            if (localMikrotikUrl.Contains("?"))
+                                localMikrotikUrl += $"&username={Uri.EscapeDataString(localUser.Username)}&password={Uri.EscapeDataString(model.Password)}";
+                            else
+                                localMikrotikUrl += $"?username={Uri.EscapeDataString(localUser.Username)}&password={Uri.EscapeDataString(model.Password)}";
+                            return Redirect(localMikrotikUrl);
+                        }
 
                         // Try Ruckus WISPr auth for local users too
                         var localWisprResult = await TryRuckusWisprAuthAsync(localUser.Username, model.Password);
