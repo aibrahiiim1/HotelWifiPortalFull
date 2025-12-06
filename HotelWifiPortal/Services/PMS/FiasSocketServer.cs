@@ -37,7 +37,7 @@ namespace HotelWifiPortal.Services.PMS
 
         public void SetPort(int port) => _port = port;
 
-        public (bool IsConnected, string Status, DateTime? LastConnectionTime, DateTime? LastMessageTime, 
+        public (bool IsConnected, string Status, DateTime? LastConnectionTime, DateTime? LastMessageTime,
                 int MessagesSent, int MessagesReceived, string? ClientIpAddress) GetStatus()
         {
             return (
@@ -69,7 +69,7 @@ namespace HotelWifiPortal.Services.PMS
                     try
                     {
                         _logger.LogInformation("Waiting for PMS connection...");
-                        
+
                         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                         _client = await _listener.AcceptTcpClientAsync(cts.Token);
                         _stream = _client.GetStream();
@@ -216,9 +216,13 @@ namespace HotelWifiPortal.Services.PMS
 
         private async Task ProcessMessageAsync(FiasMessage message)
         {
+            _logger.LogInformation("FIAS Message received: Type={Type}, Fields={Fields}",
+                message.RecordId,
+                string.Join(", ", message.Fields.Select(f => $"{f.Key}={f.Value}")));
+
             var needsAck = message.RecordId switch
             {
-                "LS" or "LA" or "LE" or "PS" or "PR" or "DR" or "DS" or "DE" => true,
+                "LS" or "LA" or "LE" or "PS" or "PR" or "DR" or "DS" or "DE" or "GI" or "GO" or "GC" => true,
                 _ => false
             };
 
@@ -227,6 +231,7 @@ namespace HotelWifiPortal.Services.PMS
 
             if (message.RecordId == "LS")
             {
+                _logger.LogInformation("Link Start received - sending handshake");
                 await Task.Delay(50);
                 await SendRawMessageAsync(_protocolService.BuildLinkDescription());
                 await Task.Delay(50);
@@ -242,12 +247,23 @@ namespace HotelWifiPortal.Services.PMS
                     { "DA", DateTime.Now.ToString("yyMMdd") },
                     { "TI", DateTime.Now.ToString("HHmmss") }
                 });
+
+                // Wait a bit then request database resync
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(2000);
+                    _logger.LogInformation("Requesting database resync from PMS...");
+                    await RequestDatabaseResyncAsync();
+                });
                 return;
             }
 
             var response = await _protocolService.ProcessMessageAsync(message);
             if (!string.IsNullOrEmpty(response))
+            {
+                _logger.LogDebug("Sending response: {Response}", response);
                 await SendRawMessageAsync(response);
+            }
         }
 
         public async Task SendMessageAsync(string recordId, Dictionary<string, string> fields)
@@ -348,7 +364,7 @@ namespace HotelWifiPortal.Services.PMS
         {
             // Wait for app to start
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-            
+
             try
             {
                 // Get PMS settings

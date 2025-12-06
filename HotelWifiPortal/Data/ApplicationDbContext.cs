@@ -12,27 +12,27 @@ namespace HotelWifiPortal.Data
 
         // Guests
         public DbSet<Guest> Guests { get; set; }
-        
+
         // WiFi Sessions
         public DbSet<WifiSession> WifiSessions { get; set; }
-        
+
         // Packages
         public DbSet<BandwidthPackage> BandwidthPackages { get; set; }
         public DbSet<PaidPackage> PaidPackages { get; set; }
         public DbSet<BandwidthProfile> BandwidthProfiles { get; set; }
-        
+
         // Transactions
         public DbSet<PaymentTransaction> PaymentTransactions { get; set; }
-        
+
         // Logs
         public DbSet<UsageLog> UsageLogs { get; set; }
         public DbSet<SystemLog> SystemLogs { get; set; }
-        
+
         // Settings
         public DbSet<SystemSetting> SystemSettings { get; set; }
         public DbSet<WifiControllerSettings> WifiControllerSettings { get; set; }
         public DbSet<PmsSettings> PmsSettings { get; set; }
-        
+
         // Users
         public DbSet<AdminUser> AdminUsers { get; set; }
         public DbSet<LocalUser> LocalUsers { get; set; }
@@ -44,21 +44,21 @@ namespace HotelWifiPortal.Data
             // Guest indexes
             modelBuilder.Entity<Guest>()
                 .HasIndex(g => g.RoomNumber);
-            
+
             modelBuilder.Entity<Guest>()
                 .HasIndex(g => g.ReservationNumber)
                 .IsUnique();
-            
+
             modelBuilder.Entity<Guest>()
                 .HasIndex(g => g.Status);
 
             // WifiSession indexes
             modelBuilder.Entity<WifiSession>()
                 .HasIndex(s => s.MacAddress);
-            
+
             modelBuilder.Entity<WifiSession>()
                 .HasIndex(s => s.Status);
-            
+
             modelBuilder.Entity<WifiSession>()
                 .HasIndex(s => s.RoomNumber);
 
@@ -70,10 +70,10 @@ namespace HotelWifiPortal.Data
             // SystemLog indexes
             modelBuilder.Entity<SystemLog>()
                 .HasIndex(l => l.Timestamp);
-            
+
             modelBuilder.Entity<SystemLog>()
                 .HasIndex(l => l.Level);
-            
+
             modelBuilder.Entity<SystemLog>()
                 .HasIndex(l => l.Category);
 
@@ -246,12 +246,14 @@ namespace HotelWifiPortal.Data
             );
 
             // Default admin user (password: admin123)
+            // Pre-computed hash for "admin123" using our BCryptHelper
             modelBuilder.Entity<AdminUser>().HasData(
                 new AdminUser
                 {
                     Id = 1,
                     Username = "admin",
-                    PasswordHash = BCryptHelper.HashPassword("admin123"),
+                    // SHA256("admin123" + "HotelWifiSalt") = this hash
+                    PasswordHash = "ewBYEdvv+jQEwSNZUpGrgzYDAM5tNPJIKjp76ZqTnNc=",
                     Email = "admin@hotel.com",
                     FullName = "System Administrator",
                     Role = "SuperAdmin",

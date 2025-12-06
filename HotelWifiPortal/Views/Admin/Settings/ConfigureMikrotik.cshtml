@@ -1,0 +1,330 @@
+@model WifiSettingsViewModel
+@{
+    ViewData["Title"] = Model.Id > 0 ? "Configure MikroTik" : "Add MikroTik Controller";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+    var hasApiConfig = !string.IsNullOrEmpty(Model.Username);
+}
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/Admin/Settings/Wifi">WiFi Controllers</a></li>
+        <li class="breadcrumb-item active">MikroTik Configuration</li>
+    </ol>
+</nav>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-x-circle me-2"></i>@TempData["Error"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="row">
+    <div class="col-lg-8">
+        <form action="/Admin/Settings/SaveMikrotik" method="post" id="mikrotikForm">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="Id" value="@Model.Id" />
+            <input type="hidden" name="ControllerType" value="Mikrotik" />
+
+            <!-- Basic Settings -->
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <i class="bi bi-router me-2"></i>Basic Settings
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-8">
+                            <label class="form-label">Controller Name <span class="text-danger">*</span></label>
+                            <input type="text" name="Name" class="form-control" placeholder="e.g., Main Hotel Router" value="@Model.Name" required />
+                            <small class="text-muted">A friendly name to identify this controller</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Status</label>
+                            <div class="form-check form-switch mt-2">
+                                <input type="hidden" name="IsEnabled" value="false" />
+                                <input type="checkbox" name="IsEnabled" class="form-check-input" value="true" id="isEnabled" @(Model.IsEnabled ? "checked" : "") />
+                                <label class="form-check-label" for="isEnabled"><strong>Enable Controller</strong></label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-8">
+                            <label class="form-label">MikroTik IP Address</label>
+                            <input type="text" name="IpAddress" class="form-control" placeholder="192.168.88.1" value="@Model.IpAddress" />
+                            <small class="text-muted">IP address of your MikroTik router</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">&nbsp;</label>
+                            <div class="form-check form-switch mt-2">
+                                <input type="hidden" name="IsDefault" value="false" />
+                                <input type="checkbox" name="IsDefault" class="form-check-input" value="true" id="isDefault" @(Model.IsDefault ? "checked" : "") />
+                                <label class="form-check-label" for="isDefault"><strong>Set as Default</strong></label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API Settings (Optional) -->
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-plug me-2"></i>API Connection (Optional)</span>
+                    <span class="badge bg-secondary">For direct MikroTik control</span>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info py-2 mb-3">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>API is optional.</strong> If you only use RADIUS mode, leave these fields empty. 
+                        Configure API only if you need direct control (MAC binding, hotspot users, etc.)
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Port</label>
+                            <input type="number" name="Port" class="form-control" placeholder="80 or 443" value="@Model.Port" />
+                            <small class="text-muted">80 for HTTP, 443 for HTTPS</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Username</label>
+                            <input type="text" name="Username" class="form-control" placeholder="admin" value="@Model.Username" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Password</label>
+                            <input type="password" name="Password" class="form-control" placeholder="••••••••" value="@Model.Password" />
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input type="hidden" name="UseHttps" value="false" />
+                                <input type="checkbox" name="UseHttps" class="form-check-input" value="true" id="useHttps" @(Model.UseHttps ? "checked" : "") />
+                                <label class="form-check-label" for="useHttps">Use HTTPS</label>
+                            </div>
+                            <small class="text-muted">Enable for secure connection (requires SSL on MikroTik)</small>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input type="hidden" name="IgnoreSslErrors" value="false" />
+                                <input type="checkbox" name="IgnoreSslErrors" class="form-check-input" value="true" id="ignoreSsl" @(Model.IgnoreSslErrors ? "checked" : "") />
+                                <label class="form-check-label" for="ignoreSsl">Ignore SSL Errors</label>
+                            </div>
+                            <small class="text-muted">Allow self-signed certificates</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hotspot Settings -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-wifi me-2"></i>Hotspot Settings
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Hotspot Server Name</label>
+                            <input type="text" name="HotspotServer" class="form-control" placeholder="hotspot1 (leave empty for default)" value="@Model.HotspotServer" />
+                            <small class="text-muted">Name of MikroTik hotspot server, leave empty for auto-detect</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">User Profile</label>
+                            <input type="text" name="UserProfile" class="form-control" placeholder="default" value="@Model.UserProfile" />
+                            <small class="text-muted">MikroTik user profile for guests</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="d-flex justify-content-between align-items-center">
+                <a href="/Admin/Settings/Wifi" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back
+                </a>
+                <div>
+                    @if (Model.Id > 0 && hasApiConfig)
+                    {
+                        <button type="button" class="btn btn-outline-success me-2" onclick="testConnection()">
+                            <i class="bi bi-plug me-1"></i>Test API Connection
+                        </button>
+                    }
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>Save Configuration
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Help Sidebar -->
+    <div class="col-lg-4">
+        <!-- Current Mode -->
+        <div class="card mb-4 @(hasApiConfig ? "border-warning" : "border-success")">
+            <div class="card-header @(hasApiConfig ? "bg-warning" : "bg-success text-white")">
+                <i class="bi bi-broadcast me-2"></i>Current Mode: @(hasApiConfig ? "API + RADIUS" : "RADIUS Only")
+            </div>
+            <div class="card-body">
+                @if (hasApiConfig)
+                {
+                    <p class="small mb-2">API credentials configured. Portal will use:</p>
+                    <ul class="small mb-0">
+                        <li>Direct API for MAC binding/hotspot users</li>
+                        <li>RADIUS for authentication &amp; accounting</li>
+                    </ul>
+                }
+                else
+                {
+                    <p class="small mb-2">Using RADIUS-only mode (recommended):</p>
+                    <ul class="small mb-0">
+                        <li>MikroTik queries this portal's RADIUS server</li>
+                        <li>No direct API connection needed</li>
+                        <li>Usage tracking via RADIUS accounting</li>
+                    </ul>
+                }
+            </div>
+        </div>
+
+        <!-- MikroTik RADIUS Setup -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-terminal me-2"></i>MikroTik RADIUS Setup
+            </div>
+            <div class="card-body small">
+                <p class="text-muted mb-2">Run these commands on your MikroTik:</p>
+
+                <h6 class="text-primary">1. Add RADIUS Server</h6>
+                <pre class="bg-dark text-light p-2 rounded mb-3" style="font-size: 11px; white-space: pre-wrap;">/radius add address=<span class="text-warning">PORTAL_IP</span> secret=<span class="text-warning">your_secret</span> service=hotspot authentication-port=1812 accounting-port=1813</pre>
+
+                <h6 class="text-primary">2. Enable RADIUS on Hotspot</h6>
+                <pre class="bg-dark text-light p-2 rounded mb-3" style="font-size: 11px; white-space: pre-wrap;">/ip hotspot profile set [find] use-radius=yes radius-accounting=yes radius-interim-update=1m</pre>
+
+                <h6 class="text-primary">3. Walled Garden</h6>
+                <pre class="bg-dark text-light p-2 rounded mb-3" style="font-size: 11px; white-space: pre-wrap;">/ip hotspot walled-garden ip add dst-host=<span class="text-warning">PORTAL_IP</span> action=accept</pre>
+            </div>
+        </div>
+
+        <!-- API Setup (if needed) -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-gear me-2"></i>API Setup (Optional)
+            </div>
+            <div class="card-body small">
+                <p class="text-muted mb-2">If you want to use API mode:</p>
+
+                <h6 class="text-primary">1. Enable REST API</h6>
+                <pre class="bg-dark text-light p-2 rounded mb-3" style="font-size: 11px; white-space: pre-wrap;">/ip service set www disabled=no port=80
+/ip service set www-ssl disabled=no port=443</pre>
+
+                <h6 class="text-primary">2. Create API User</h6>
+                <pre class="bg-dark text-light p-2 rounded mb-3" style="font-size: 11px; white-space: pre-wrap;">/user add name=wifiportal password=YourPassword group=full</pre>
+
+                <h6 class="text-primary">3. Allow Access</h6>
+                <pre class="bg-dark text-light p-2 rounded mb-3" style="font-size: 11px; white-space: pre-wrap;">/ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="Portal API"</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Test Connection Modal -->
+<div class="modal fade" id="testModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plug me-2"></i>API Connection Test</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="testProgress" class="text-center py-4">
+                    <div class="spinner-border text-primary mb-3"></div>
+                    <p class="text-muted">Testing connection...</p>
+                </div>
+                <div id="testResult" style="display: none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+// Debug form submission
+document.getElementById('mikrotikForm').addEventListener('submit', function(e) {
+    console.log('=== Form Submitting ===');
+    var formData = new FormData(this);
+    for (var pair of formData.entries()) {
+        console.log(pair[0] + ': ' + pair[1]);
+    }
+});
+
+// Test connection function
+function testConnection() {
+    var modal = new bootstrap.Modal(document.getElementById('testModal'));
+    document.getElementById('testProgress').style.display = 'block';
+    document.getElementById('testResult').style.display = 'none';
+    modal.show();
+    
+    fetch('/Admin/Settings/TestMikrotikApi?id=@Model.Id', {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json',
+            'RequestVerificationToken': document.querySelector('input[name="__RequestVerificationToken"]').value
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        document.getElementById('testProgress').style.display = 'none';
+        document.getElementById('testResult').style.display = 'block';
+        
+        if (data.success) {
+            document.getElementById('testResult').innerHTML = `
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle me-2"></i><strong>Connection Successful!</strong>
+                </div>
+                <div class="small">
+                    <p><strong>Router:</strong> ${data.routerName || 'N/A'}</p>
+                    <p><strong>Version:</strong> ${data.version || 'N/A'}</p>
+                    <p><strong>Uptime:</strong> ${data.uptime || 'N/A'}</p>
+                </div>
+            `;
+        } else {
+            document.getElementById('testResult').innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-x-circle me-2"></i><strong>Connection Failed</strong>
+                </div>
+                <p class="small text-muted">${data.error || 'Unknown error'}</p>
+                <div class="small mt-2">
+                    <strong>Troubleshooting:</strong>
+                    <ul class="mb-0">
+                        <li>Check IP address is correct</li>
+                        <li>Verify username/password</li>
+                        <li>Ensure www or www-ssl service is enabled</li>
+                        <li>Check firewall allows connection</li>
+                    </ul>
+                </div>
+            `;
+        }
+    })
+    .catch(error => {
+        document.getElementById('testProgress').style.display = 'none';
+        document.getElementById('testResult').style.display = 'block';
+        document.getElementById('testResult').innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-x-circle me-2"></i><strong>Error:</strong> ${error.message}
+            </div>
+        `;
+    });
+}
+</script>
+}

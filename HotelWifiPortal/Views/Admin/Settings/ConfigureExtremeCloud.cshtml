@@ -1,0 +1,173 @@
+@model WifiSettingsViewModel
+@{
+    ViewData["Title"] = Model.Id > 0 ? "Configure ExtremeCloud IQ" : "Add ExtremeCloud IQ";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/Admin/Settings/Wifi">WiFi Controllers</a></li>
+        <li class="breadcrumb-item active">ExtremeCloud IQ</li>
+    </ol>
+</nav>
+
+<div class="row">
+    <div class="col-lg-8">
+        <form action="/Admin/Settings/SaveExtremeCloud" method="post">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="Id" value="@Model.Id" />
+            <input type="hidden" name="ControllerType" value="ExtremeCloud" />
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-cloud-check me-2"></i>ExtremeCloud IQ API Settings
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Controller Name <span class="text-danger">*</span></label>
+                            <input type="text" name="Name" class="form-control" placeholder="e.g., ExtremeCloud IQ" value="@Model.Name" required />
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch mt-4">
+                                <input type="hidden" name="IsEnabled" value="false" />
+                                <input type="checkbox" name="IsEnabled" class="form-check-input" value="true" @(Model.IsEnabled ? "checked" : "") />
+                                <label class="form-check-label">Enable Controller</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">API Base URL <span class="text-danger">*</span></label>
+                        <select name="ApiUrl" class="form-select">
+                            @{
+                                var apiUrls = new[] {
+                                    ("https://api.extremecloudiq.com", "Global (api.extremecloudiq.com)"),
+                                    ("https://api.eu.extremecloudiq.com", "Europe (api.eu.extremecloudiq.com)"),
+                                    ("https://api.de.extremecloudiq.com", "Germany (api.de.extremecloudiq.com)")
+                                };
+                            }
+                            @foreach (var url in apiUrls)
+                            {
+                                if (Model.ApiUrl == url.Item1)
+                                {
+                                    @Html.Raw($"<option value=\"{url.Item1}\" selected>{url.Item2}</option>")
+                                }
+                                else
+                                {
+                                    @Html.Raw($"<option value=\"{url.Item1}\">{url.Item2}</option>")
+                                }
+                            }
+                        </select>
+                        <small class="text-muted">Select the regional API endpoint for your account</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">API Bearer Token <span class="text-danger">*</span></label>
+                        <input type="password" name="ApiKey" class="form-control" value="@Model.ApiKey" />
+                        <small class="text-muted">Generate an API token from ExtremeCloud IQ dashboard</small>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Owner ID (Optional)</label>
+                            <input type="text" name="OwnerId" class="form-control" placeholder="owner-id" />
+                            <small class="text-muted">For multi-tenant setups</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Location ID (Optional)</label>
+                            <input type="text" name="LocationId" class="form-control" placeholder="location-id" />
+                            <small class="text-muted">Filter to specific location</small>
+                        </div>
+                    </div>
+
+                    <div class="form-check form-switch">
+                        <input type="hidden" name="IsDefault" value="false" />
+                                <input type="checkbox" name="IsDefault" class="form-check-input" value="true" @(Model.IsDefault ? "checked" : "") />
+                        <label class="form-check-label">Set as Default Controller</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between">
+                <a href="/Admin/Settings/Wifi" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back
+                </a>
+                <div>
+                    @if (Model.Id > 0)
+                    {
+                        <button type="button" class="btn btn-success me-2" onclick="testConnection()">
+                            <i class="bi bi-plug me-1"></i>Test Connection
+                        </button>
+                    }
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>Save Configuration
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="col-lg-4">
+        @if (Model.Id > 0)
+        {
+            <div class="card mb-4">
+                <div class="card-header"><i class="bi bi-activity me-2"></i>Connection Status</div>
+                <div class="card-body text-center">
+                    <span class="badge bg-@(Model.ConnectionStatus == "connected" ? "success" : "warning") fs-5 p-2">
+                        @(Model.ConnectionStatus ?? "Unknown")
+                    </span>
+                </div>
+            </div>
+        }
+
+        <div class="card">
+            <div class="card-header"><i class="bi bi-question-circle me-2"></i>ExtremeCloud IQ Setup</div>
+            <div class="card-body small">
+                <h6>1. Generate API Token</h6>
+                <p>Go to <strong>Global Settings &gt; API Token Management</strong> and create a new token.</p>
+                <h6>2. Required Permissions</h6>
+                <ul>
+                    <li>Device Management (Read/Write)</li>
+                    <li>Client Management (Read/Write)</li>
+                    <li>Configuration (Read)</li>
+                </ul>
+                <h6>3. Configure Guest Network</h6>
+                <p>Enable Captive Portal and set external portal URL.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="testModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plug me-2"></i>Connection Test</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="testResult">
+                <div class="text-center py-4"><div class="spinner-border text-primary"></div><p class="mt-2">Testing...</p></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    function testConnection() {
+        const modal = new bootstrap.Modal(document.getElementById('testModal'));
+        modal.show();
+        fetch('/Admin/Settings/TestWifiConnectionJson?id=@Model.Id', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('testResult').innerHTML = data.success 
+                    ? `<div class="alert alert-success"><i class="bi bi-check-circle me-2"></i>${data.message}</div>`
+                    : `<div class="alert alert-danger"><i class="bi bi-x-circle me-2"></i>${data.message}</div>`;
+            });
+    }
+</script>
+}

@@ -169,10 +169,10 @@
             </div>
         }
 
-        <!-- Available Packages -->
-        @if (Model.AvailablePackages.Any())
+        <!-- Available Packages - Only show when quota is low or exhausted -->
+        @if (Model.AvailablePackages.Any() && (Model.IsQuotaExhausted || Model.UsagePercentage > 80))
         {
-            <h5 class="mb-3"><i class="bi bi-cart me-2"></i>Need More Data?</h5>
+            <h5 class="mb-3"><i class="bi bi-cart me-2"></i>@(Model.IsQuotaExhausted ? "Purchase More Data" : "Running Low? Get More Data")</h5>
             <div class="row g-4 mb-4">
                 @foreach (var package in Model.AvailablePackages)
                 {

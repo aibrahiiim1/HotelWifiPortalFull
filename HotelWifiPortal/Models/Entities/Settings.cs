@@ -75,6 +75,13 @@ namespace HotelWifiPortal.Models.Entities
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+        // MikroTik Hotspot settings
+        [MaxLength(100)]
+        public string? HotspotServer { get; set; }
+
+        [MaxLength(100)]
+        public string? UserProfile { get; set; }
     }
 
     // PMS Settings (FIAS)

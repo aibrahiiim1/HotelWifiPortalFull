@@ -11,7 +11,6 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HotelWifiPortal.Controllers.Admin
 {
-    [Route("Admin/[controller]/[action]")]
     public class DashboardController : Controller
     {
         private readonly ApplicationDbContext _dbContext;
@@ -51,10 +50,24 @@ namespace HotelWifiPortal.Controllers.Admin
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Login(AdminLoginViewModel model)
         {
+            // Log model state errors for debugging
             if (!ModelState.IsValid)
             {
+                foreach (var key in ModelState.Keys)
+                {
+                    var state = ModelState[key];
+                    if (state?.Errors.Count > 0)
+                    {
+                        foreach (var errors in state.Errors)
+                        {
+                            _logger.LogWarning("ModelState Error - {Key}: {Error}", key, errors.ErrorMessage);
+                        }
+                    }
+                }
                 return View(model);
             }
+
+            _logger.LogInformation("Admin login attempt for user: {Username}", model.Username);
 
             var (success, user, error) = await _authService.AuthenticateAdminAsync(model.Username, model.Password);
 

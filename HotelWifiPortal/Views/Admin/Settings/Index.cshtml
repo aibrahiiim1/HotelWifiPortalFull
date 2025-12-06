@@ -79,9 +79,14 @@
                             {
                                 @foreach (var profile in Model.BandwidthProfiles)
                                 {
-                                    <option value="@profile.Id" selected="@(Model.DefaultBandwidthProfileId == profile.Id)">
-                                        @profile.Name (@profile.DownloadSpeedKbps/@profile.UploadSpeedKbps Kbps)
-                                    </option>
+                                    if (Model.DefaultBandwidthProfileId == profile.Id)
+                                    {
+                                        @Html.Raw($"<option value=\"{profile.Id}\" selected>{profile.Name} ({profile.DownloadSpeedKbps}/{profile.UploadSpeedKbps} Kbps)</option>")
+                                    }
+                                    else
+                                    {
+                                        @Html.Raw($"<option value=\"{profile.Id}\">{profile.Name} ({profile.DownloadSpeedKbps}/{profile.UploadSpeedKbps} Kbps)</option>")
+                                    }
                                 }
                             }
                         </select>

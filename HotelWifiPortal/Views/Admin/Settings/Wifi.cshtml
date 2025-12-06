@@ -2,110 +2,402 @@
 @{
     ViewData["Title"] = "WiFi Controllers";
     Layout = "~/Views/Shared/_AdminLayout.cshtml";
+    
+    var mikrotik = Model.FirstOrDefault(m => m.ControllerType == "Mikrotik");
+    var ruckusZd = Model.FirstOrDefault(m => m.ControllerType == "RuckusZD");
+    var ruckusCloud = Model.FirstOrDefault(m => m.ControllerType == "Ruckus");
+    var extremeCloud = Model.FirstOrDefault(m => m.ControllerType == "ExtremeCloud");
 }
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <p class="text-muted mb-0">Configure WiFi controllers for guest authentication and bandwidth management.</p>
-    <a asp-action="CreateWifi" class="btn btn-primary">
-        <i class="bi bi-plus-lg me-1"></i>Add Controller
-    </a>
 </div>
 
-<div class="row g-4">
-    @foreach (var controller in Model)
-    {
-        <div class="col-md-6 col-lg-4">
-            <div class="card h-100">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span>
-                        <i class="bi bi-router me-2"></i>@controller.Name
+<!-- Controller Cards -->
+<div class="row g-4 mb-4">
+    <!-- MikroTik -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100 @(mikrotik?.IsEnabled == true ? "border-success" : "")">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-router me-2"></i>MikroTik</span>
+                @if (mikrotik != null)
+                {
+                    <span class="badge @(mikrotik.IsEnabled ? "bg-success" : "bg-secondary")">
+                        @(mikrotik.IsEnabled ? "Active" : "Disabled")
                     </span>
-                    <span class="badge @(controller.IsEnabled ? "bg-success" : "bg-secondary")">
-                        @(controller.IsEnabled ? "Enabled" : "Disabled")
-                    </span>
-                </div>
-                <div class="card-body">
-                    <dl class="mb-0">
-                        <dt>Type</dt>
-                        <dd>
-                            <span class="badge bg-info">@controller.ControllerType</span>
-                            @if (controller.IsDefault)
-                            {
-                                <span class="badge bg-primary ms-1">Default</span>
-                            }
-                        </dd>
+                }
+            </div>
+            <div class="card-body">
+                @if (mikrotik != null)
+                {
+                    <dl class="mb-0 small">
                         <dt>IP Address</dt>
-                        <dd>@(controller.IpAddress ?? "Not set")@(controller.Port.HasValue ? $":{controller.Port}" : "")</dd>
-                        <dt>Connection Status</dt>
+                        <dd>@mikrotik.IpAddress@(mikrotik.Port.HasValue ? $":{mikrotik.Port}" : "")</dd>
+                        <dt>Status</dt>
                         <dd>
-                            <span class="badge @(controller.ConnectionStatus == "connected" ? "bg-success" : "bg-secondary")">
-                                @(controller.ConnectionStatus ?? "Unknown")
+                            <span class="badge @(mikrotik.ConnectionStatus == "connected" ? "bg-success" : "bg-warning")">
+                                @(mikrotik.ConnectionStatus ?? "Unknown")
                             </span>
-                            @if (controller.LastConnectionTest.HasValue)
-                            {
-                                <small class="text-muted ms-2">@controller.LastConnectionTest.Value.ToString("g")</small>
-                            }
                         </dd>
                     </dl>
-                </div>
-                <div class="card-footer bg-white">
-                    <div class="btn-group w-100">
-                        <form asp-action="TestWifiConnection" asp-route-id="@controller.Id" method="post" class="d-inline">
-                            @Html.AntiForgeryToken()
-                            <button type="submit" class="btn btn-sm btn-outline-success">
-                                <i class="bi bi-plug me-1"></i>Test
-                            </button>
-                        </form>
-                        <a asp-action="EditWifi" asp-route-id="@controller.Id" class="btn btn-sm btn-outline-primary">
-                            <i class="bi bi-pencil me-1"></i>Edit
+                }
+                else
+                {
+                    <p class="text-muted small mb-0">Not configured</p>
+                }
+            </div>
+            <div class="card-footer bg-white">
+                @if (mikrotik != null)
+                {
+                    <div class="btn-group w-100" role="group">
+                        <a href="/Admin/Settings/ConfigureMikrotik" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-gear me-1"></i>Configure
                         </a>
-                        <form asp-action="DeleteWifi" asp-route-id="@controller.Id" method="post" class="d-inline" onsubmit="return confirm('Delete this controller?');">
+                        <form action="/Admin/Settings/ToggleController/@mikrotik.Id" method="post" style="display:inline;">
                             @Html.AntiForgeryToken()
-                            <button type="submit" class="btn btn-sm btn-outline-danger">
-                                <i class="bi bi-trash me-1"></i>Delete
+                            <button type="submit" class="btn btn-sm @(mikrotik.IsEnabled ? "btn-outline-warning" : "btn-outline-success")">
+                                <i class="bi @(mikrotik.IsEnabled ? "bi-pause" : "bi-play") me-1"></i>
+                                @(mikrotik.IsEnabled ? "Disable" : "Enable")
                             </button>
                         </form>
                     </div>
-                </div>
-            </div>
-        </div>
-    }
-
-    @if (!Model.Any())
-    {
-        <div class="col-12">
-            <div class="card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-router fs-1 text-muted mb-3"></i>
-                    <h5>No WiFi Controllers Configured</h5>
-                    <p class="text-muted">Add a WiFi controller to enable guest authentication and bandwidth management.</p>
-                    <a asp-action="CreateWifi" class="btn btn-primary">
-                        <i class="bi bi-plus-lg me-1"></i>Add Controller
+                }
+                else
+                {
+                    <a href="/Admin/Settings/ConfigureMikrotik" class="btn btn-sm btn-primary w-100">
+                        <i class="bi bi-plus-lg me-1"></i>Add MikroTik
                     </a>
-                </div>
+                }
             </div>
         </div>
-    }
+    </div>
+
+    <!-- Ruckus ZoneDirector -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100 @(ruckusZd?.IsEnabled == true ? "border-success" : "")">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-broadcast me-2"></i>Ruckus ZD</span>
+                @if (ruckusZd != null)
+                {
+                    <span class="badge @(ruckusZd.IsEnabled ? "bg-success" : "bg-secondary")">
+                        @(ruckusZd.IsEnabled ? "Active" : "Disabled")
+                    </span>
+                }
+            </div>
+            <div class="card-body">
+                @if (ruckusZd != null)
+                {
+                    <dl class="mb-0 small">
+                        <dt>IP Address</dt>
+                        <dd>@ruckusZd.IpAddress@(ruckusZd.Port.HasValue ? $":{ruckusZd.Port}" : "")</dd>
+                        <dt>Status</dt>
+                        <dd>
+                            <span class="badge @(ruckusZd.ConnectionStatus == "connected" ? "bg-success" : "bg-warning")">
+                                @(ruckusZd.ConnectionStatus ?? "Unknown")
+                            </span>
+                        </dd>
+                    </dl>
+                }
+                else
+                {
+                    <p class="text-muted small mb-0">Not configured</p>
+                }
+            </div>
+            <div class="card-footer bg-white">
+                @if (ruckusZd != null)
+                {
+                    <div class="btn-group w-100" role="group">
+                        <a href="/Admin/Settings/ConfigureRuckusZD" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-gear me-1"></i>Configure
+                        </a>
+                        <form action="/Admin/Settings/ToggleController/@ruckusZd.Id" method="post" style="display:inline;">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn btn-sm @(ruckusZd.IsEnabled ? "btn-outline-warning" : "btn-outline-success")">
+                                <i class="bi @(ruckusZd.IsEnabled ? "bi-pause" : "bi-play") me-1"></i>
+                                @(ruckusZd.IsEnabled ? "Disable" : "Enable")
+                            </button>
+                        </form>
+                    </div>
+                }
+                else
+                {
+                    <a href="/Admin/Settings/ConfigureRuckusZD" class="btn btn-sm btn-primary w-100">
+                        <i class="bi bi-plus-lg me-1"></i>Add Ruckus ZD
+                    </a>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Ruckus Cloud -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100 @(ruckusCloud?.IsEnabled == true ? "border-success" : "")">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-cloud me-2"></i>Ruckus Cloud</span>
+                @if (ruckusCloud != null)
+                {
+                    <span class="badge @(ruckusCloud.IsEnabled ? "bg-success" : "bg-secondary")">
+                        @(ruckusCloud.IsEnabled ? "Active" : "Disabled")
+                    </span>
+                }
+            </div>
+            <div class="card-body">
+                @if (ruckusCloud != null)
+                {
+                    <dl class="mb-0 small">
+                        <dt>API URL</dt>
+                        <dd class="text-truncate">@(ruckusCloud.ApiUrl ?? "Not set")</dd>
+                        <dt>Status</dt>
+                        <dd>
+                            <span class="badge @(ruckusCloud.ConnectionStatus == "connected" ? "bg-success" : "bg-warning")">
+                                @(ruckusCloud.ConnectionStatus ?? "Unknown")
+                            </span>
+                        </dd>
+                    </dl>
+                }
+                else
+                {
+                    <p class="text-muted small mb-0">Not configured</p>
+                }
+            </div>
+            <div class="card-footer bg-white">
+                @if (ruckusCloud != null)
+                {
+                    <div class="btn-group w-100" role="group">
+                        <a href="/Admin/Settings/ConfigureRuckusCloud" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-gear me-1"></i>Configure
+                        </a>
+                        <form action="/Admin/Settings/ToggleController/@ruckusCloud.Id" method="post" style="display:inline;">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn btn-sm @(ruckusCloud.IsEnabled ? "btn-outline-warning" : "btn-outline-success")">
+                                <i class="bi @(ruckusCloud.IsEnabled ? "bi-pause" : "bi-play") me-1"></i>
+                                @(ruckusCloud.IsEnabled ? "Disable" : "Enable")
+                            </button>
+                        </form>
+                    </div>
+                }
+                else
+                {
+                    <a href="/Admin/Settings/ConfigureRuckusCloud" class="btn btn-sm btn-primary w-100">
+                        <i class="bi bi-plus-lg me-1"></i>Add Ruckus Cloud
+                    </a>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- ExtremeCloud IQ -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card h-100 @(extremeCloud?.IsEnabled == true ? "border-success" : "")">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-cloud-check me-2"></i>ExtremeCloud</span>
+                @if (extremeCloud != null)
+                {
+                    <span class="badge @(extremeCloud.IsEnabled ? "bg-success" : "bg-secondary")">
+                        @(extremeCloud.IsEnabled ? "Active" : "Disabled")
+                    </span>
+                }
+            </div>
+            <div class="card-body">
+                @if (extremeCloud != null)
+                {
+                    <dl class="mb-0 small">
+                        <dt>API URL</dt>
+                        <dd class="text-truncate">@(extremeCloud.ApiUrl ?? "Not set")</dd>
+                        <dt>Status</dt>
+                        <dd>
+                            <span class="badge @(extremeCloud.ConnectionStatus == "connected" ? "bg-success" : "bg-warning")">
+                                @(extremeCloud.ConnectionStatus ?? "Unknown")
+                            </span>
+                        </dd>
+                    </dl>
+                }
+                else
+                {
+                    <p class="text-muted small mb-0">Not configured</p>
+                }
+            </div>
+            <div class="card-footer bg-white">
+                @if (extremeCloud != null)
+                {
+                    <div class="btn-group w-100" role="group">
+                        <a href="/Admin/Settings/ConfigureExtremeCloud" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-gear me-1"></i>Configure
+                        </a>
+                        <form action="/Admin/Settings/ToggleController/@extremeCloud.Id" method="post" style="display:inline;">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn btn-sm @(extremeCloud.IsEnabled ? "btn-outline-warning" : "btn-outline-success")">
+                                <i class="bi @(extremeCloud.IsEnabled ? "bi-pause" : "bi-play") me-1"></i>
+                                @(extremeCloud.IsEnabled ? "Disable" : "Enable")
+                            </button>
+                        </form>
+                    </div>
+                }
+                else
+                {
+                    <a href="/Admin/Settings/ConfigureExtremeCloud" class="btn btn-sm btn-primary w-100">
+                        <i class="bi bi-plus-lg me-1"></i>Add ExtremeCloud
+                    </a>
+                }
+            </div>
+        </div>
+    </div>
 </div>
 
-<div class="card mt-4">
+<!-- Controller Features Info -->
+<div class="card mb-4">
     <div class="card-header">
-        <i class="bi bi-info-circle me-2"></i>Supported Controllers
+        <i class="bi bi-info-circle me-2"></i>Controller Capabilities
     </div>
     <div class="card-body">
-        <div class="row">
-            <div class="col-md-4">
-                <h6><i class="bi bi-router me-2"></i>Ruckus ZoneDirector</h6>
-                <p class="text-muted small">Supports user authentication, bandwidth limiting, client management via REST API.</p>
-            </div>
-            <div class="col-md-4">
-                <h6><i class="bi bi-router me-2"></i>MikroTik RouterOS</h6>
-                <p class="text-muted small">Supports Hotspot, bandwidth queues, access lists via REST API.</p>
-            </div>
-            <div class="col-md-4">
-                <h6><i class="bi bi-router me-2"></i>ExtremeCloud IQ</h6>
-                <p class="text-muted small">Cloud-managed WiFi with user authentication and client management.</p>
-            </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th class="text-center">MikroTik</th>
+                        <th class="text-center">Ruckus ZD</th>
+                        <th class="text-center">Ruckus Cloud</th>
+                        <th class="text-center">ExtremeCloud</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Guest Authentication</td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                    </tr>
+                    <tr>
+                        <td>Bandwidth Limiting</td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                    </tr>
+                    <tr>
+                        <td>MAC Binding</td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-x-circle text-secondary"></i></td>
+                        <td class="text-center"><i class="bi bi-x-circle text-secondary"></i></td>
+                        <td class="text-center"><i class="bi bi-x-circle text-secondary"></i></td>
+                    </tr>
+                    <tr>
+                        <td>Hotspot Integration</td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-x-circle text-secondary"></i></td>
+                        <td class="text-center"><i class="bi bi-x-circle text-secondary"></i></td>
+                    </tr>
+                    <tr>
+                        <td>RADIUS Integration</td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                        <td class="text-center"><i class="bi bi-check-circle text-success"></i></td>
+                    </tr>
+                    <tr>
+                        <td>API Type</td>
+                        <td class="text-center"><span class="badge bg-info">REST</span></td>
+                        <td class="text-center"><span class="badge bg-info">REST</span></td>
+                        <td class="text-center"><span class="badge bg-info">Cloud API</span></td>
+                        <td class="text-center"><span class="badge bg-info">Cloud API</span></td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
+    </div>
+</div>
+
+<!-- All Controllers List -->
+@if (Model.Any())
+{
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-list me-2"></i>All Configured Controllers</span>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Mode</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var controller in Model)
+                    {
+                        <tr>
+                            <td>
+                                @controller.Name
+                                @if (controller.IsDefault)
+                                {
+                                    <span class="badge bg-primary ms-1">Default</span>
+                                }
+                            </td>
+                            <td><span class="badge bg-info">@controller.ControllerType</span></td>
+                            <td>
+                                @if (string.IsNullOrEmpty(controller.Username))
+                                {
+                                    <span class="badge bg-success">RADIUS</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-warning">API</span>
+                                }
+                            </td>
+                            <td>
+                                <span class="badge @(controller.IsEnabled ? "bg-success" : "bg-secondary")">
+                                    @(controller.IsEnabled ? "Enabled" : "Disabled")
+                                </span>
+                            </td>
+                            <td>
+                                <div class="btn-group btn-group-sm">
+                                    @{
+                                        var editUrl = controller.ControllerType switch
+                                        {
+                                            "Mikrotik" => "/Admin/Settings/ConfigureMikrotik",
+                                            "RuckusZD" => "/Admin/Settings/ConfigureRuckusZD",
+                                            "Ruckus" => "/Admin/Settings/ConfigureRuckusCloud",
+                                            "ExtremeCloud" => "/Admin/Settings/ConfigureExtremeCloud",
+                                            _ => $"/Admin/Settings/EditWifi/{controller.Id}"
+                                        };
+                                    }
+                                    <a href="@editUrl" class="btn btn-outline-primary">
+                                        <i class="bi bi-pencil"></i> Edit
+                                    </a>
+                                    <form action="/Admin/Settings/DeleteWifi/@controller.Id" method="post" style="display:inline;" onsubmit="return confirm('Delete this controller?');">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn btn-outline-danger">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+<!-- Info about RADIUS Mode -->
+<div class="card mt-4">
+    <div class="card-header bg-info text-white">
+        <i class="bi bi-info-circle me-2"></i>About RADIUS Mode
+    </div>
+    <div class="card-body">
+        <p class="mb-2">This portal uses <strong>RADIUS mode</strong> by default. In this mode:</p>
+        <ul class="mb-0">
+            <li>No direct API connection to WiFi controllers is needed</li>
+            <li>MikroTik/Ruckus sends authentication requests to this portal's built-in RADIUS server</li>
+            <li>Usage tracking and quota enforcement is handled via RADIUS accounting</li>
+            <li>Configure your WiFi controller to use this server as RADIUS server (ports 1812/1813)</li>
+        </ul>
     </div>
 </div>

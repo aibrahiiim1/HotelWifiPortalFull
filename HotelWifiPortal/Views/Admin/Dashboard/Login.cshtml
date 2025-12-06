@@ -46,37 +46,55 @@
             <small class="opacity-75">Hotel WiFi Management</small>
         </div>
         <div class="login-body">
-            @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+            @if (!string.IsNullOrEmpty(Model?.ErrorMessage))
             {
                 <div class="alert alert-danger">
                     <i class="bi bi-exclamation-circle me-2"></i>@Model.ErrorMessage
                 </div>
             }
+            
+            @if (!ViewData.ModelState.IsValid)
+            {
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    <strong>Validation Errors:</strong>
+                    <ul class="mb-0 mt-2">
+                    @foreach (var state in ViewData.ModelState.Values)
+                    {
+                        @foreach (var error in state.Errors)
+                        {
+                            <li>@error.ErrorMessage</li>
+                        }
+                    }
+                    </ul>
+                </div>
+            }
 
-            <form asp-action="Login" method="post">
-                <input type="hidden" asp-for="ReturnUrl" />
+            <form action="/Admin/Dashboard/Login" method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="ReturnUrl" value="@Model?.ReturnUrl" />
                 
                 <div class="mb-3">
-                    <label asp-for="Username" class="form-label">Username</label>
+                    <label for="Username" class="form-label">Username</label>
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-person"></i></span>
-                        <input type="text" class="form-control" asp-for="Username" placeholder="Enter username" autofocus />
+                        <input type="text" class="form-control" id="Username" name="Username" value="@Model?.Username" placeholder="Enter username" autofocus />
                     </div>
-                    <span asp-validation-for="Username" class="text-danger small"></span>
+                    <span class="text-danger small">@Html.ValidationMessage("Username")</span>
                 </div>
 
                 <div class="mb-3">
-                    <label asp-for="Password" class="form-label">Password</label>
+                    <label for="Password" class="form-label">Password</label>
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-key"></i></span>
-                        <input type="password" class="form-control" asp-for="Password" placeholder="Enter password" />
+                        <input type="password" class="form-control" id="Password" name="Password" placeholder="Enter password" />
                     </div>
-                    <span asp-validation-for="Password" class="text-danger small"></span>
+                    <span class="text-danger small">@Html.ValidationMessage("Password")</span>
                 </div>
 
                 <div class="mb-3 form-check">
-                    <input type="checkbox" class="form-check-input" asp-for="RememberMe" />
-                    <label class="form-check-label" asp-for="RememberMe">Remember me</label>
+                    <input type="checkbox" class="form-check-input" id="RememberMe" name="RememberMe" value="true" @(Model?.RememberMe == true ? "checked" : "") />
+                    <label class="form-check-label" for="RememberMe">Remember me</label>
                 </div>
 
                 <button type="submit" class="btn btn-primary btn-login w-100">

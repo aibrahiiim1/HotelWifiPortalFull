@@ -1,0 +1,336 @@
+@{
+    ViewData["Title"] = "FreeRADIUS Management";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<style>
+    .log-entry { font-family: monospace; font-size: 12px; padding: 2px 5px; border-bottom: 1px solid #eee; }
+    .log-info { color: #17a2b8; }
+    .log-success { color: #28a745; }
+    .log-warning { color: #ffc107; }
+    .log-error { color: #dc3545; }
+    pre.sql-code { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 5px; font-size: 11px; max-height: 400px; overflow: auto; }
+    .nav-pills .nav-link.active { background-color: #0d6efd; }
+    .packet-hex { font-family: 'Courier New', monospace; font-size: 11px; background: #f8f9fa; padding: 10px; border-radius: 4px; word-break: break-all; }
+    .radius-attr { background: #e7f3ff; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin: 2px; display: inline-block; }
+    .config-status { padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+    .config-status.enabled { background: #d4edda; color: #155724; }
+    .config-status.disabled { background: #f8d7da; color: #721c24; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="mb-1"><i class="bi bi-server me-2"></i>FreeRADIUS Management</h4>
+        <small class="text-muted">Configure and test FreeRADIUS with PAP/CHAP support</small>
+    </div>
+    <div class="d-flex align-items-center gap-3">
+        <div id="globalStatus" class="config-status disabled"><i class="bi bi-circle-fill me-1" style="font-size:8px"></i><span>Loading...</span></div>
+        <a href="@Url.Action("Radius")" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Back</a>
+    </div>
+</div>
+
+<ul class="nav nav-pills mb-4">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="pill" data-bs-target="#config"><i class="bi bi-gear me-1"></i>Configuration</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#status"><i class="bi bi-activity me-1"></i>Status & Test</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#radius-test"><i class="bi bi-send me-1"></i>RADIUS Tester</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#users"><i class="bi bi-people me-1"></i>Users</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#debug"><i class="bi bi-bug me-1"></i>Debug</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#schema"><i class="bi bi-database me-1"></i>Schema</button></li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="config">
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between"><span><i class="bi bi-sliders me-2"></i>Configuration</span><span id="configSaveStatus" class="badge bg-secondary">Not saved</span></div>
+                    <div class="card-body">
+                        <form id="freeRadiusConfigForm">
+                            <div class="row mb-4">
+                                <div class="col-md-6">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="freeRadiusEnabled" style="transform:scale(1.3)">
+                                        <label class="form-check-label fw-bold ms-2">Enable FreeRADIUS</label>
+                                    </div>
+                                    <small class="text-muted">Sync users to FreeRADIUS SQL</small>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="disableBuiltinRadius" style="transform:scale(1.3)">
+                                        <label class="form-check-label fw-bold ms-2">Disable Built-in RADIUS</label>
+                                    </div>
+                                    <small class="text-muted">Use only FreeRADIUS</small>
+                                </div>
+                            </div>
+                            <hr><h6 class="mb-3"><i class="bi bi-database me-2"></i>MySQL Connection</h6>
+                            <div class="row mb-3">
+                                <div class="col-md-5"><label class="form-label">Server</label><input type="text" class="form-control" id="dbServer" placeholder="localhost"></div>
+                                <div class="col-md-2"><label class="form-label">Port</label><input type="number" class="form-control" id="dbPort" value="3306"></div>
+                                <div class="col-md-5"><label class="form-label">Database</label><input type="text" class="form-control" id="dbName" placeholder="radius"></div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-md-6"><label class="form-label">Username</label><input type="text" class="form-control" id="dbUser" placeholder="radius"></div>
+                                <div class="col-md-6"><label class="form-label">Password</label><div class="input-group"><input type="password" class="form-control" id="dbPassword"><button class="btn btn-outline-secondary" type="button" onclick="togglePwd('dbPassword')"><i class="bi bi-eye"></i></button></div></div>
+                            </div>
+                            <div class="mb-3"><label class="form-label">Connection String</label><div class="input-group"><input type="text" class="form-control font-monospace" id="connectionString" readonly><button class="btn btn-primary" type="button" onclick="testConnection()"><i class="bi bi-plug me-1"></i>Test</button></div></div>
+                            <hr><h6 class="mb-3"><i class="bi bi-shield-lock me-2"></i>RADIUS Settings</h6>
+                            <div class="row mb-3">
+                                <div class="col-md-6"><label class="form-label">Shared Secret</label><div class="input-group"><input type="password" class="form-control" id="nasSecret"><button class="btn btn-outline-secondary" type="button" onclick="togglePwd('nasSecret')"><i class="bi bi-eye"></i></button></div></div>
+                                <div class="col-md-3"><label class="form-label">Auth Port</label><input type="number" class="form-control" id="authPort" value="1812"></div>
+                                <div class="col-md-3"><label class="form-label">Acct Port</label><input type="number" class="form-control" id="acctPort" value="1813"></div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-md-3"><label class="form-label">Table Prefix</label><input type="text" class="form-control" id="tablePrefix" value="rad"></div>
+                                <div class="col-md-3"><label class="form-label">Sync (min)</label><input type="number" class="form-control" id="syncInterval" value="5"></div>
+                                <div class="col-md-3"><label class="form-label">CoA Port</label><input type="number" class="form-control" id="coaPort" value="3799"></div>
+                                <div class="col-md-3"><label class="form-label">Protocol</label><select class="form-select" id="defaultProtocol"><option value="PAP">PAP</option><option value="CHAP">CHAP</option><option value="MSCHAP">MS-CHAPv2</option></select></div>
+                            </div>
+                            <div class="mb-3"><label class="form-label">FreeRADIUS Server IP</label><input type="text" class="form-control" id="radiusServer" placeholder="127.0.0.1"></div>
+                            <div class="d-flex justify-content-between mt-4">
+                                <button type="button" class="btn btn-outline-danger" onclick="resetConfig()"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset</button>
+                                <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i>Save Configuration</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="card mb-3">
+                    <div class="card-header"><i class="bi bi-lightning me-2"></i>Quick Actions</div>
+                    <div class="card-body">
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-outline-primary" onclick="initializeDatabase()"><i class="bi bi-database-add me-2"></i>Initialize Database</button>
+                            <button class="btn btn-outline-success" onclick="syncAllUsers()"><i class="bi bi-arrow-repeat me-2"></i>Sync All Guests</button>
+                            <button class="btn btn-outline-info" onclick="syncBandwidthProfiles()"><i class="bi bi-speedometer me-2"></i>Sync Profiles</button>
+                            <button class="btn btn-outline-warning" onclick="cleanupOldUsers()"><i class="bi bi-trash me-2"></i>Cleanup</button>
+                        </div>
+                        <div id="actionResult" class="mt-3"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between"><span><i class="bi bi-info-circle me-2"></i>Status</span><button class="btn btn-sm btn-outline-primary" onclick="refreshStatus()"><i class="bi bi-arrow-clockwise"></i></button></div>
+                    <div class="card-body" id="connectionStatus"><div class="text-center py-3"><div class="spinner-border spinner-border-sm"></div></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="status">
+        <div class="row">
+            <div class="col-lg-6">
+                <div class="card mb-3">
+                    <div class="card-header"><i class="bi bi-person-check me-2"></i>Auth Test</div>
+                    <div class="card-body">
+                        <form id="testAuthForm">
+                            <div class="row mb-3">
+                                <div class="col-6"><label class="form-label">Username</label><input type="text" class="form-control" name="username" placeholder="room101"></div>
+                                <div class="col-6"><label class="form-label">Password</label><input type="password" class="form-control" name="password"></div>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100"><i class="bi bi-key me-1"></i>Test Auth</button>
+                        </form>
+                        <div id="authTestResult" class="mt-3"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><i class="bi bi-broadcast me-2"></i>CoA/Disconnect</div>
+                    <div class="card-body">
+                        <form id="testCoaForm">
+                            <div class="row mb-3">
+                                <div class="col-6"><label class="form-label">NAS IP</label><input type="text" class="form-control" name="nasIp" placeholder="10.0.0.1"></div>
+                                <div class="col-6"><label class="form-label">Username</label><input type="text" class="form-control" name="username"></div>
+                            </div>
+                            <div class="mb-3"><label class="form-label">Action</label><select class="form-select" name="action" onchange="document.querySelector('.coa-options').style.display=this.value==='coa'?'block':'none'"><option value="disconnect">Disconnect</option><option value="coa">CoA</option></select></div>
+                            <div class="coa-options row mb-3" style="display:none">
+                                <div class="col-6"><label class="form-label">Down Kbps</label><input type="number" class="form-control" name="downloadKbps" value="2048"></div>
+                                <div class="col-6"><label class="form-label">Up Kbps</label><input type="number" class="form-control" name="uploadKbps" value="1024"></div>
+                            </div>
+                            <button type="submit" class="btn btn-warning w-100"><i class="bi bi-send me-1"></i>Send</button>
+                        </form>
+                        <div id="coaTestResult" class="mt-3"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header"><i class="bi bi-person-plus me-2"></i>Create Test User</div>
+                    <div class="card-body">
+                        <form id="createUserForm">
+                            <div class="row mb-3">
+                                <div class="col-6"><label class="form-label">Username</label><input type="text" class="form-control" name="username" placeholder="testuser"></div>
+                                <div class="col-6"><label class="form-label">Password</label><input type="text" class="form-control" name="password" value="password123"></div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-6"><label class="form-label">Down Kbps</label><input type="number" class="form-control" name="downloadKbps" value="2048"></div>
+                                <div class="col-6"><label class="form-label">Up Kbps</label><input type="number" class="form-control" name="uploadKbps" value="1024"></div>
+                            </div>
+                            <button type="submit" class="btn btn-success w-100"><i class="bi bi-plus-circle me-1"></i>Create</button>
+                        </form>
+                        <div id="createUserResult" class="mt-3"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="radius-test">
+        <div class="row">
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header bg-primary text-white"><i class="bi bi-send-fill me-2"></i>RADIUS Packet Tester</div>
+                    <div class="card-body">
+                        <form id="radiusTestForm">
+                            <div class="row mb-3">
+                                <div class="col-8"><label class="form-label fw-bold">Server</label><input type="text" class="form-control" name="serverIp" id="testServerIp" placeholder="127.0.0.1"></div>
+                                <div class="col-4"><label class="form-label fw-bold">Port</label><input type="number" class="form-control" name="serverPort" id="testServerPort" value="1812"></div>
+                            </div>
+                            <div class="mb-3"><label class="form-label fw-bold">Secret</label><div class="input-group"><input type="password" class="form-control" name="secret" id="testSecret"><button class="btn btn-outline-secondary" type="button" onclick="togglePwd('testSecret')"><i class="bi bi-eye"></i></button><button class="btn btn-outline-info" type="button" onclick="copyFromConfig()"><i class="bi bi-clipboard"></i></button></div></div>
+                            <div class="mb-3"><label class="form-label fw-bold">Request Type</label><select class="form-select" name="requestType" id="requestType" onchange="updateRequestFields()"><option value="access-request">Access-Request</option><option value="accounting-start">Accounting-Start</option><option value="accounting-stop">Accounting-Stop</option><option value="accounting-update">Accounting-Update</option><option value="status-server">Status-Server</option><option value="coa-request">CoA-Request</option><option value="disconnect-request">Disconnect-Request</option></select></div>
+                            <div class="mb-3" id="authProtocolSection"><label class="form-label fw-bold">Auth Protocol</label><select class="form-select" name="authProtocol" id="authProtocol"><option value="PAP">PAP</option><option value="CHAP">CHAP</option><option value="MSCHAP">MS-CHAPv1</option><option value="MSCHAPv2">MS-CHAPv2</option></select></div>
+                            <div id="credentialsSection"><div class="row mb-3"><div class="col-6"><label class="form-label">Username</label><input type="text" class="form-control" name="username" id="testUsername"></div><div class="col-6"><label class="form-label">Password</label><input type="password" class="form-control" name="password" id="testPassword"></div></div></div>
+                            <div id="sessionSection" style="display:none"><div class="row mb-3"><div class="col-6"><label class="form-label">Session ID</label><input type="text" class="form-control" name="sessionId" id="testSessionId"></div><div class="col-6"><label class="form-label">Framed IP</label><input type="text" class="form-control" name="framedIp"></div></div><div class="row mb-3"><div class="col-4"><label class="form-label">Session Time</label><input type="number" class="form-control" name="sessionTime" value="3600"></div><div class="col-4"><label class="form-label">In Bytes</label><input type="number" class="form-control" name="inputBytes" value="1048576"></div><div class="col-4"><label class="form-label">Out Bytes</label><input type="number" class="form-control" name="outputBytes" value="5242880"></div></div></div>
+                            <div class="mb-3"><label class="form-label">NAS Identifier</label><input type="text" class="form-control" name="nasIdentifier" placeholder="hotel-nas"></div>
+                            <div class="row mb-3"><div class="col-6"><label class="form-label">NAS IP</label><input type="text" class="form-control" name="nasIpAddress" placeholder="10.0.0.1"></div><div class="col-6"><label class="form-label">Calling Station</label><input type="text" class="form-control" name="callingStationId" placeholder="AA-BB-CC-DD-EE-FF"></div></div>
+                            <div class="mb-3"><label class="form-label">Timeout (sec)</label><input type="number" class="form-control" name="timeout" value="5" min="1" max="30"></div>
+                            <button type="submit" class="btn btn-primary btn-lg w-100"><i class="bi bi-send-fill me-2"></i>Send Packet</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card mb-3">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between"><span><i class="bi bi-terminal me-2"></i>Response</span><button class="btn btn-sm btn-outline-light" onclick="clearResponse()">Clear</button></div>
+                    <div class="card-body bg-dark text-light" style="min-height:200px" id="radiusResponse"><div class="text-muted text-center py-5"><i class="bi bi-arrow-left-circle" style="font-size:3rem"></i><div class="mt-2">Send a request</div></div></div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><i class="bi bi-file-binary me-2"></i>Packet Details</div>
+                    <div class="card-body">
+                        <ul class="nav nav-tabs"><li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#requestPacket">Request</button></li><li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#responsePacket">Response</button></li></ul>
+                        <div class="tab-content mt-3"><div class="tab-pane fade show active" id="requestPacket"><div id="requestPacketDetails" class="packet-hex text-muted">No request</div></div><div class="tab-pane fade" id="responsePacket"><div id="responsePacketDetails" class="packet-hex text-muted">No response</div></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="users">
+        <div class="row">
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between"><span><i class="bi bi-people me-2"></i>RADIUS Users</span><button class="btn btn-sm btn-outline-primary" onclick="loadRadiusUsers()"><i class="bi bi-arrow-clockwise"></i></button></div>
+                    <div class="card-body p-0" style="max-height:400px;overflow:auto" id="radiusUsersTable"><div class="text-center py-4"><div class="spinner-border"></div></div></div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between"><span><i class="bi bi-wifi me-2"></i>Sessions</span><button class="btn btn-sm btn-outline-primary" onclick="loadActiveSessions()"><i class="bi bi-arrow-clockwise"></i></button></div>
+                    <div class="card-body p-0" style="max-height:400px;overflow:auto" id="activeSessionsTable"><div class="text-center py-4"><div class="spinner-border"></div></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="debug">
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between"><span><i class="bi bi-terminal me-2"></i>Debug Log</span><div><button class="btn btn-sm btn-success" id="startDebugLog" onclick="startDebugLog()"><i class="bi bi-play-fill"></i></button><button class="btn btn-sm btn-danger" id="stopDebugLog" onclick="stopDebugLog()" disabled><i class="bi bi-stop-fill"></i></button><button class="btn btn-sm btn-secondary" onclick="clearDebugLog()"><i class="bi bi-trash"></i></button></div></div>
+                    <div class="card-body bg-dark p-2" style="height:400px;overflow-y:auto" id="debugLogContainer"><div class="text-muted text-center py-5">Click Start</div></div>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="card">
+                    <div class="card-header"><i class="bi bi-code-square me-2"></i>SQL Query</div>
+                    <div class="card-body">
+                        <select class="form-select mb-3" id="quickQuery" onchange="if(this.value)document.getElementById('customQuery').value=this.value"><option value="">Quick Queries</option><option value="SELECT * FROM radcheck ORDER BY id DESC LIMIT 20">Users</option><option value="SELECT * FROM radacct WHERE acctstoptime IS NULL LIMIT 20">Sessions</option><option value="SELECT * FROM radpostauth ORDER BY id DESC LIMIT 20">Auth Log</option><option value="SELECT * FROM nas">NAS</option></select>
+                        <textarea class="form-control font-monospace mb-3" id="customQuery" rows="3" placeholder="SELECT * FROM radcheck LIMIT 10"></textarea>
+                        <button class="btn btn-primary w-100" onclick="executeQuery()"><i class="bi bi-play me-1"></i>Execute</button>
+                    </div>
+                </div>
+                <div class="card mt-3"><div class="card-header">Results</div><div class="card-body p-0" style="max-height:250px;overflow:auto" id="queryResults"><div class="p-3 text-muted">Run a query</div></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="schema">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between"><span><i class="bi bi-file-code me-2"></i>FreeRADIUS Schema</span><button class="btn btn-sm btn-outline-primary" onclick="copySchema()"><i class="bi bi-clipboard me-1"></i>Copy</button></div>
+            <div class="card-body"><div class="alert alert-info"><i class="bi bi-info-circle me-2"></i>Run this SQL to create tables.</div><pre class="sql-code" id="schemaCode">Loading...</pre></div>
+        </div>
+    </div>
+</div>
+
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index:1050"><div id="toastNotification" class="toast"><div class="toast-header"><strong class="me-auto" id="toastTitle">Notification</strong><button type="button" class="btn-close" data-bs-dismiss="toast"></button></div><div class="toast-body" id="toastMessage"></div></div></div>
+
+@section Scripts {
+<script>
+let debugLogInterval = null;
+const apiBase = '/Admin/Settings';
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadCurrentConfig(); loadSchema(); setupEventListeners();
+    document.getElementById('testSessionId').value = 'session-' + Date.now();
+});
+
+function setupEventListeners() {
+    ['dbServer','dbPort','dbName','dbUser','dbPassword'].forEach(id => document.getElementById(id)?.addEventListener('input', updateConnectionString));
+    document.getElementById('freeRadiusConfigForm')?.addEventListener('submit', saveConfig);
+    document.getElementById('testAuthForm')?.addEventListener('submit', testAuthentication);
+    document.getElementById('testCoaForm')?.addEventListener('submit', testCoa);
+    document.getElementById('createUserForm')?.addEventListener('submit', createTestUser);
+    document.getElementById('radiusTestForm')?.addEventListener('submit', sendRadiusPacket);
+    document.querySelectorAll('[data-bs-toggle="pill"]').forEach(t => t.addEventListener('shown.bs.tab', e => { if(e.target.textContent.includes('Users')){loadRadiusUsers();loadActiveSessions();} else if(e.target.textContent.includes('Status'))refreshStatus(); }));
+}
+
+function togglePwd(id) { const el = document.getElementById(id); el.type = el.type === 'password' ? 'text' : 'password'; }
+function updateConnectionString() { const s=document.getElementById('dbServer').value||'localhost', p=document.getElementById('dbPort').value||'3306', d=document.getElementById('dbName').value||'radius', u=document.getElementById('dbUser').value||'radius', pw=document.getElementById('dbPassword').value||''; document.getElementById('connectionString').value=`Server=${s};Port=${p};Database=${d};User=${u};Password=${pw};`; }
+function updateRequestFields() { const t=document.getElementById('requestType').value; document.getElementById('authProtocolSection').style.display=t==='access-request'?'block':'none'; document.getElementById('credentialsSection').style.display=t!=='status-server'?'block':'none'; document.getElementById('sessionSection').style.display=t.startsWith('accounting')?'block':'none'; document.getElementById('testServerPort').value=t.startsWith('accounting')?'1813':(t.includes('coa')||t.includes('disconnect')?'3799':'1812'); }
+function copyFromConfig() { document.getElementById('testSecret').value=document.getElementById('nasSecret').value||''; document.getElementById('testServerIp').value=document.getElementById('radiusServer').value||'127.0.0.1'; showNotification('Copied','Values copied','success'); }
+
+async function loadCurrentConfig() {
+    try {
+        const res = await fetch(`${apiBase}/FreeRadiusGetConfig`); if (!res.ok) throw new Error('Failed'); const data = await res.json();
+        if (data.success && data.config) { const c=data.config; document.getElementById('freeRadiusEnabled').checked=c.enabled; document.getElementById('disableBuiltinRadius').checked=c.disableBuiltin||false; document.getElementById('dbServer').value=c.server||'localhost'; document.getElementById('dbPort').value=c.port||'3306'; document.getElementById('dbName').value=c.database||'radius'; document.getElementById('dbUser').value=c.user||'radius'; document.getElementById('dbPassword').value=c.password||''; document.getElementById('tablePrefix').value=c.tablePrefix||'rad'; document.getElementById('nasSecret').value=c.nasSecret||''; document.getElementById('syncInterval').value=c.syncInterval||'5'; document.getElementById('coaPort').value=c.coaPort||'3799'; document.getElementById('authPort').value=c.authPort||'1812'; document.getElementById('acctPort').value=c.acctPort||'1813'; document.getElementById('defaultProtocol').value=c.defaultProtocol||'PAP'; document.getElementById('radiusServer').value=c.radiusServer||'127.0.0.1'; updateConnectionString(); updateGlobalStatus(c.enabled, c.enabled?'FreeRADIUS Enabled':'FreeRADIUS Disabled'); document.getElementById('testServerIp').value=c.radiusServer||'127.0.0.1'; document.getElementById('testSecret').value=c.nasSecret||''; }
+        refreshStatus();
+    } catch (err) { console.error(err); updateGlobalStatus(false,'Error loading'); }
+}
+
+function updateGlobalStatus(enabled, msg) { const el=document.getElementById('globalStatus'); el.className='config-status '+(enabled?'enabled':'disabled'); el.innerHTML=`<i class="bi bi-circle-fill me-1" style="font-size:8px"></i><span>${msg}</span>`; }
+
+async function saveConfig(e) {
+    e.preventDefault();
+    const config = { enabled:document.getElementById('freeRadiusEnabled').checked, disableBuiltin:document.getElementById('disableBuiltinRadius').checked, connectionString:document.getElementById('connectionString').value, tablePrefix:document.getElementById('tablePrefix').value||'rad', nasSecret:document.getElementById('nasSecret').value||'', syncInterval:parseInt(document.getElementById('syncInterval').value)||5, coaPort:parseInt(document.getElementById('coaPort').value)||3799, authPort:parseInt(document.getElementById('authPort').value)||1812, acctPort:parseInt(document.getElementById('acctPort').value)||1813, defaultProtocol:document.getElementById('defaultProtocol').value||'PAP', radiusServer:document.getElementById('radiusServer').value||'127.0.0.1' };
+    try { document.getElementById('configSaveStatus').className='badge bg-warning'; document.getElementById('configSaveStatus').textContent='Saving...'; const res=await fetch(`${apiBase}/FreeRadiusSaveConfig`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)}); if(!res.ok)throw new Error('Server error'); const data=await res.json(); if(data.success){document.getElementById('configSaveStatus').className='badge bg-success';document.getElementById('configSaveStatus').textContent='Saved!';updateGlobalStatus(config.enabled,config.enabled?'FreeRADIUS Enabled':'FreeRADIUS Disabled');showNotification('Success','Configuration saved','success');setTimeout(()=>{document.getElementById('configSaveStatus').className='badge bg-secondary';document.getElementById('configSaveStatus').textContent='Saved';},3000);}else throw new Error(data.message); } catch(err){document.getElementById('configSaveStatus').className='badge bg-danger';document.getElementById('configSaveStatus').textContent='Error!';showNotification('Error',err.message,'danger');}
+}
+
+function resetConfig() { if(confirm('Reset all?')) loadCurrentConfig(); }
+async function testConnection() { const connStr=document.getElementById('connectionString').value; if(!connStr){showNotification('Error','Fill details first','danger');return;} try{const res=await fetch(`${apiBase}/FreeRadiusTestConnection`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connectionString:connStr})});const data=await res.json();showNotification(data.success?'Success':'Failed',data.message,data.success?'success':'danger');}catch(err){showNotification('Error',err.message,'danger');} }
+
+async function refreshStatus() { const c=document.getElementById('connectionStatus'); c.innerHTML='<div class="text-center"><div class="spinner-border spinner-border-sm"></div></div>'; try{const res=await fetch(`${apiBase}/FreeRadiusGetStatus`);const data=await res.json();c.innerHTML=`<div class="row g-2 mb-2"><div class="col-6"><div class="p-2 rounded text-center ${data.enabled?'bg-success bg-opacity-10':'bg-secondary bg-opacity-10'}"><div class="small text-muted">Integration</div><div class="fw-bold ${data.enabled?'text-success':'text-secondary'}">${data.enabled?'Enabled':'Disabled'}</div></div></div><div class="col-6"><div class="p-2 rounded text-center ${data.databaseConnected?'bg-success bg-opacity-10':'bg-danger bg-opacity-10'}"><div class="small text-muted">Database</div><div class="fw-bold ${data.databaseConnected?'text-success':'text-danger'}">${data.databaseConnected?'Connected':'Error'}</div></div></div></div><div class="row g-2 text-center"><div class="col-4"><div class="text-muted small">Users</div><div class="fw-bold">${data.userCount||0}</div></div><div class="col-4"><div class="text-muted small">Sessions</div><div class="fw-bold">${data.activeSessions||0}</div></div><div class="col-4"><div class="text-muted small">NAS</div><div class="fw-bold">${data.nasCount||0}</div></div></div>${data.message&&!data.success?`<div class="alert alert-warning mt-2 py-1 small mb-0">${data.message}</div>`:''}`;}catch(err){c.innerHTML=`<div class="alert alert-danger mb-0">${err.message}</div>`;} }
+
+async function testAuthentication(e) { e.preventDefault(); const r=document.getElementById('authTestResult'); r.innerHTML='<div class="spinner-border spinner-border-sm"></div>'; try{const res=await fetch(`${apiBase}/FreeRadiusTestAuth`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:e.target.username.value,password:e.target.password.value})});const data=await res.json();r.innerHTML=`<div class="alert alert-${data.success?'success':'danger'} py-2 mb-0">${data.message}</div>`;}catch(err){r.innerHTML=`<div class="alert alert-danger py-2 mb-0">${err.message}</div>`;} }
+async function testCoa(e) { e.preventDefault(); const r=document.getElementById('coaTestResult'); r.innerHTML='<div class="spinner-border spinner-border-sm"></div>'; try{const f=e.target;const res=await fetch(`${apiBase}/FreeRadiusTestCoa`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nasIp:f.nasIp.value,username:f.username.value,action:f.action.value,downloadKbps:parseInt(f.downloadKbps?.value)||0,uploadKbps:parseInt(f.uploadKbps?.value)||0})});const data=await res.json();r.innerHTML=`<div class="alert alert-${data.success?'success':'danger'} py-2 mb-0">${data.message}</div>`;}catch(err){r.innerHTML=`<div class="alert alert-danger py-2 mb-0">${err.message}</div>`;} }
+
+async function sendRadiusPacket(e) { e.preventDefault(); const rd=document.getElementById('radiusResponse'),rq=document.getElementById('requestPacketDetails'),rs=document.getElementById('responsePacketDetails'); rd.innerHTML='<div class="text-center py-4"><div class="spinner-border text-light"></div></div>'; const f=e.target; try{const res=await fetch(`${apiBase}/FreeRadiusSendPacket`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serverIp:f.serverIp.value,serverPort:parseInt(f.serverPort.value),secret:f.secret.value,requestType:f.requestType.value,authProtocol:f.authProtocol.value,username:f.username.value,password:f.password.value,sessionId:f.sessionId.value,framedIp:f.framedIp?.value,sessionTime:parseInt(f.sessionTime?.value)||0,inputBytes:parseInt(f.inputBytes?.value)||0,outputBytes:parseInt(f.outputBytes?.value)||0,nasIdentifier:f.nasIdentifier.value,nasIpAddress:f.nasIpAddress.value,callingStationId:f.callingStationId.value,timeout:parseInt(f.timeout.value)||5})});const data=await res.json();if(data.success){let a='';if(data.attributes)data.attributes.forEach(x=>a+=`<span class="radius-attr">${x.name}=${x.value}</span> `);rd.innerHTML=`<div class="mb-3"><span class="badge fs-6 ${data.responseCode.includes('Accept')||data.responseCode.includes('Response')?'bg-success':data.responseCode.includes('Reject')?'bg-danger':'bg-warning'}">${data.responseCode}</span><span class="ms-2 text-muted">${data.roundTripMs}ms</span></div><div class="mb-2"><strong>Attributes:</strong></div><div>${a||'<span class="text-muted">None</span>'}</div>`;}else{rd.innerHTML=`<div class="text-danger text-center py-3"><i class="bi bi-x-circle" style="font-size:2rem"></i><div class="mt-2"><strong>${data.error||'Failed'}</strong></div><div class="small">${data.message||''}</div></div>`;}if(data.requestHex)rq.innerHTML=data.requestHex;if(data.responseHex)rs.innerHTML=data.responseHex;}catch(err){rd.innerHTML=`<div class="text-danger text-center py-3">${err.message}</div>`;} }
+function clearResponse() { document.getElementById('radiusResponse').innerHTML='<div class="text-muted text-center py-5"><i class="bi bi-arrow-left-circle" style="font-size:3rem"></i></div>'; document.getElementById('requestPacketDetails').innerHTML='<span class="text-muted">No request</span>'; document.getElementById('responsePacketDetails').innerHTML='<span class="text-muted">No response</span>'; }
+
+async function syncAllUsers() { await doAction('FreeRadiusSyncUsers','Syncing...'); }
+async function syncBandwidthProfiles() { await doAction('FreeRadiusSyncProfiles','Syncing...'); }
+async function initializeDatabase() { if(confirm('Create tables?')) await doAction('FreeRadiusInitDatabase','Initializing...'); }
+async function cleanupOldUsers() { await doAction('FreeRadiusCleanup','Cleaning...'); }
+async function doAction(endpoint, msg) { const r=document.getElementById('actionResult'); r.innerHTML=`<div class="spinner-border spinner-border-sm"></div> ${msg}`; try{const res=await fetch(`${apiBase}/${endpoint}`,{method:'POST'});const data=await res.json();r.innerHTML=`<div class="alert alert-${data.success?'success':'danger'} py-2 mb-0">${data.message}</div>`;if(data.success)showNotification('Success',data.message,'success');}catch(err){r.innerHTML=`<div class="alert alert-danger py-2 mb-0">${err.message}</div>`;} }
+
+async function loadRadiusUsers() { const c=document.getElementById('radiusUsersTable'); c.innerHTML='<div class="text-center py-3"><div class="spinner-border"></div></div>'; try{const res=await fetch(`${apiBase}/FreeRadiusGetUsers`);const data=await res.json();if(data.users?.length>0){let h='<table class="table table-sm table-striped mb-0"><thead><tr><th>User</th><th>Attr</th><th>Value</th></tr></thead><tbody>';data.users.forEach(u=>h+=`<tr><td><code>${u.username}</code></td><td>${u.attribute}</td><td class="text-truncate" style="max-width:100px">${u.value}</td></tr>`);c.innerHTML=h+'</tbody></table>';}else c.innerHTML=`<div class="text-center py-4 text-muted">${data.message||'No users'}</div>`;}catch(err){c.innerHTML=`<div class="alert alert-danger m-3">${err.message}</div>`;} }
+async function loadActiveSessions() { const c=document.getElementById('activeSessionsTable'); c.innerHTML='<div class="text-center py-3"><div class="spinner-border"></div></div>'; try{const res=await fetch(`${apiBase}/FreeRadiusGetSessions`);const data=await res.json();if(data.sessions?.length>0){let h='<table class="table table-sm table-striped mb-0"><thead><tr><th>User</th><th>IP</th><th>Duration</th><th>Usage</th></tr></thead><tbody>';data.sessions.forEach(s=>h+=`<tr><td><code>${s.username}</code></td><td>${s.ip}</td><td>${s.duration}</td><td>${s.usage}</td></tr>`);c.innerHTML=h+'</tbody></table>';}else c.innerHTML=`<div class="text-center py-4 text-muted">${data.message||'No sessions'}</div>`;}catch(err){c.innerHTML=`<div class="alert alert-danger m-3">${err.message}</div>`;} }
+async function createTestUser(e) { e.preventDefault(); const r=document.getElementById('createUserResult'); r.innerHTML='<div class="spinner-border spinner-border-sm"></div>'; try{const f=e.target;const res=await fetch(`${apiBase}/FreeRadiusCreateUser`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:f.username.value,password:f.password.value,downloadKbps:parseInt(f.downloadKbps.value)||2048,uploadKbps:parseInt(f.uploadKbps.value)||1024})});const data=await res.json();r.innerHTML=`<div class="alert alert-${data.success?'success':'danger'} py-2 mb-0">${data.message||'Created!'}</div>`;}catch(err){r.innerHTML=`<div class="alert alert-danger py-2 mb-0">${err.message}</div>`;} }
+
+async function loadSchema() { try{const res=await fetch(`${apiBase}/FreeRadiusGetSchema`);const data=await res.json();document.getElementById('schemaCode').textContent=data.schema||'-- Schema not available';}catch(err){document.getElementById('schemaCode').textContent='-- Error: '+err.message;} }
+function copySchema() { navigator.clipboard.writeText(document.getElementById('schemaCode').textContent).then(()=>showNotification('Copied','Schema copied','success')); }
+async function executeQuery() { const q=document.getElementById('customQuery').value; if(!q)return; const c=document.getElementById('queryResults'); c.innerHTML='<div class="text-center py-3"><div class="spinner-border spinner-border-sm"></div></div>'; try{const res=await fetch(`${apiBase}/FreeRadiusExecuteQuery`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});const data=await res.json();if(data.success&&data.rows){if(data.rows.length===0)c.innerHTML='<div class="text-center py-4 text-muted">No results</div>';else{const cols=Object.keys(data.rows[0]);let h='<table class="table table-sm table-striped mb-0"><thead><tr>'+cols.map(x=>`<th>${x}</th>`).join('')+'</tr></thead><tbody>';data.rows.forEach(row=>{h+='<tr>'+cols.map(x=>`<td class="text-truncate" style="max-width:100px">${row[x]??''}</td>`).join('')+'</tr>';});c.innerHTML=h+'</tbody></table>';}}else c.innerHTML=`<div class="alert alert-danger m-2 py-2">${data.message||'Error'}</div>`;}catch(err){c.innerHTML=`<div class="alert alert-danger m-2 py-2">${err.message}</div>`;} }
+
+function startDebugLog() { document.getElementById('startDebugLog').disabled=true; document.getElementById('stopDebugLog').disabled=false; document.getElementById('debugLogContainer').innerHTML=''; addDebugLog('info','Started...'); debugLogInterval=setInterval(async()=>{try{const res=await fetch(`${apiBase}/FreeRadiusGetDebugLogs`);const data=await res.json();if(data.logs)data.logs.forEach(l=>addDebugLog(l.level,l.message,l.time));}catch(e){}},2000); }
+function stopDebugLog() { document.getElementById('startDebugLog').disabled=false; document.getElementById('stopDebugLog').disabled=true; clearInterval(debugLogInterval); addDebugLog('info','Stopped.'); }
+function clearDebugLog() { document.getElementById('debugLogContainer').innerHTML='<div class="text-muted text-center py-3">Cleared</div>'; }
+function addDebugLog(level, message, time) { const c=document.getElementById('debugLogContainer'); const d=document.createElement('div'); d.className=`log-entry log-${level}`; d.innerHTML=`<span class="text-muted">[${time||new Date().toLocaleTimeString()}]</span> <span class="badge bg-${level==='error'?'danger':level==='warning'?'warning':'info'} me-1">${level.toUpperCase()}</span> ${message}`; c.appendChild(d); c.scrollTop=c.scrollHeight; }
+function showNotification(title, message, type) { document.getElementById('toastTitle').textContent=title; document.getElementById('toastMessage').textContent=message; const t=document.getElementById('toastNotification'); t.className=`toast bg-${type==='danger'?'danger':type==='success'?'success':'info'} text-white`; new bootstrap.Toast(t).show(); }
+</script>
+}

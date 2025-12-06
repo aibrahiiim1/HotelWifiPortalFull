@@ -23,7 +23,7 @@ namespace HotelWifiPortal.Services.WiFi
             {
                 "Ruckus" => new RuckusController(settings, _loggerFactory.CreateLogger<RuckusController>(), _httpClientFactory),
                 "RuckusZD" => new RuckusZoneDirectorController(settings, _loggerFactory.CreateLogger<RuckusZoneDirectorController>(), _httpClientFactory),
-                "Mikrotik" => new MikrotikController(settings, _loggerFactory.CreateLogger<MikrotikController>(), _httpClientFactory),
+                "Mikrotik" => new MikrotikController(settings, _loggerFactory.CreateLogger<MikrotikController>(), _httpClientFactory, _serviceProvider),
                 "ExtremeCloud" => new ExtremeCloudController(settings, _loggerFactory.CreateLogger<ExtremeCloudController>(), _httpClientFactory),
                 _ => null
             };

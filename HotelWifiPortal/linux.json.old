@@ -1,0 +1,7 @@
+//sudo chown -R www-data:www-data /var/www/hotelwifi
+//sudo chmod -R 755 /var/www/hotelwifi
+
+//sudo chown -R hotspot:hotspot /var/www/hotelwifi
+
+//sudo chown -R www-data:www-data /var/www/hotelwifi
+//sudo chmod -R 755 /var/www/hotelwifi

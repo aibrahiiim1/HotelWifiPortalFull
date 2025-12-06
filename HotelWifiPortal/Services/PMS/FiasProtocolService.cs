@@ -227,6 +227,12 @@ namespace HotelWifiPortal.Services.PMS
             var reservationNumber = message.GetField("G#");
             var guestName = message.GetField("GN");
 
+            _logger.LogInformation("=== Guest Check-In Received ===");
+            _logger.LogInformation("Room: {Room}, Reservation: {Res}, Name: {Name}",
+                roomNumber, reservationNumber, guestName);
+            _logger.LogInformation("All fields: {Fields}",
+                string.Join(", ", message.Fields.Select(f => $"{f.Key}={f.Value}")));
+
             if (string.IsNullOrEmpty(reservationNumber))
             {
                 reservationNumber = !string.IsNullOrEmpty(roomNumber)
@@ -235,7 +241,11 @@ namespace HotelWifiPortal.Services.PMS
             }
 
             var guestKey = !string.IsNullOrEmpty(reservationNumber) ? reservationNumber : roomNumber;
-            if (string.IsNullOrEmpty(guestKey)) return null;
+            if (string.IsNullOrEmpty(guestKey))
+            {
+                _logger.LogWarning("No guest key found - skipping");
+                return null;
+            }
 
             var guest = new Guest
             {
@@ -308,7 +318,7 @@ namespace HotelWifiPortal.Services.PMS
                 guest.Status = "checked-out";
                 guest.UpdatedAt = DateTime.UtcNow;
                 await dbContext.SaveChangesAsync();
-                
+
                 _logger.LogInformation("Guest checked out: Room {Room}", roomNumber);
             }
 
@@ -318,7 +328,7 @@ namespace HotelWifiPortal.Services.PMS
         private async Task<string?> HandleGuestChangeAsync(FiasMessage message)
         {
             var reservationNumber = message.GetField("G#");
-            
+
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
 
@@ -375,7 +385,7 @@ namespace HotelWifiPortal.Services.PMS
         public string BuildPostingMessage(string roomNumber, string reservationNumber, decimal amount, string description)
         {
             var amountCents = ((int)(amount * 100)).ToString();
-            
+
             return BuildMessage("PS", new Dictionary<string, string>
             {
                 { "RN", roomNumber },
@@ -394,7 +404,7 @@ namespace HotelWifiPortal.Services.PMS
             var quotaService = scope.ServiceProvider.GetRequiredService<QuotaService>();
 
             var existingGuest = await dbContext.Guests.FirstOrDefaultAsync(g => g.ReservationNumber == guest.ReservationNumber);
-            
+
             if (existingGuest != null)
             {
                 existingGuest.RoomNumber = guest.RoomNumber;

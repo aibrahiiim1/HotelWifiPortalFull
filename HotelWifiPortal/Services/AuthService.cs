@@ -1,5 +1,6 @@
 using HotelWifiPortal.Data;
 using HotelWifiPortal.Models.Entities;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
@@ -21,25 +22,50 @@ namespace HotelWifiPortal.Services
         // Guest authentication (PMS mode)
         public async Task<(bool Success, Guest? Guest, string? Error)> AuthenticateGuestAsync(string roomNumber, string password)
         {
-            // In PMS mode, password is the reservation number
+            _logger.LogInformation("=== Guest Authentication Attempt ===");
+            _logger.LogInformation("Room: {Room}, Password: {Pass}", roomNumber, password);
+
+            // First, find guest by room number only to see if they exist
+            var allGuestsInRoom = await _dbContext.Guests
+                .Where(g => g.RoomNumber == roomNumber)
+                .ToListAsync();
+
+            _logger.LogInformation("Found {Count} guest(s) in room {Room}", allGuestsInRoom.Count, roomNumber);
+
+            foreach (var g in allGuestsInRoom)
+            {
+                _logger.LogInformation("  - Guest: {Name}, Status: {Status}, ResNum: {Res}, LocalPwd: {Pwd}, Arrival: {Arr}, Departure: {Dep}",
+                    g.GuestName, g.Status, g.ReservationNumber,
+                    string.IsNullOrEmpty(g.LocalPassword) ? "(none)" : "(set)",
+                    g.ArrivalDate.ToString("yyyy-MM-dd"), g.DepartureDate.ToString("yyyy-MM-dd"));
+            }
+
+            // In PMS mode, password is the reservation number or local password
             var guest = await _dbContext.Guests
-                .FirstOrDefaultAsync(g => 
-                    g.RoomNumber == roomNumber && 
-                    g.Status == "checked-in" &&
-                    (g.ReservationNumber == password || 
+                .FirstOrDefaultAsync(g =>
+                    g.RoomNumber == roomNumber &&
+                    (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn" || g.Status == "active") &&
+                    (g.ReservationNumber == password ||
+                     g.ReservationNumber.ToLower() == password.ToLower() ||
                      g.ReservationNumber.EndsWith(password) || // Last N digits
-                     g.LocalPassword == password)); // Or local password
+                     g.LocalPassword == password ||
+                     (!string.IsNullOrEmpty(g.LocalPassword) && g.LocalPassword.ToLower() == password.ToLower())));
 
             if (guest == null)
             {
-                _logger.LogWarning("Guest authentication failed for room {Room}", roomNumber);
+                _logger.LogWarning("Guest authentication failed for room {Room} - no matching guest found", roomNumber);
+                _logger.LogWarning("Check: 1) Status must be 'checked-in', 2) Password must match ReservationNumber or LocalPassword");
                 return (false, null, "Invalid room number or password. Please check your details and try again.");
             }
 
             // Check if guest is still within stay dates
             var now = DateTime.Today;
+            _logger.LogInformation("Date check - Today: {Today}, Arrival: {Arr}, Departure: {Dep}",
+                now.ToString("yyyy-MM-dd"), guest.ArrivalDate.ToString("yyyy-MM-dd"), guest.DepartureDate.ToString("yyyy-MM-dd"));
+
             if (now < guest.ArrivalDate.Date || now > guest.DepartureDate.Date)
             {
+                _logger.LogWarning("Guest {Name} in room {Room} - date check failed", guest.GuestName, roomNumber);
                 return (false, null, "Your stay dates do not allow WiFi access at this time.");
             }
 
@@ -49,7 +75,7 @@ namespace HotelWifiPortal.Services
                 await _quotaService.AssignFreeQuotaToGuestAsync(guest);
             }
 
-            _logger.LogInformation("Guest authenticated: Room {Room}, Guest {Name}", roomNumber, guest.GuestName);
+            _logger.LogInformation("Guest authenticated successfully: Room {Room}, Guest {Name}", roomNumber, guest.GuestName);
             return (true, guest, null);
         }
 
@@ -94,7 +120,7 @@ namespace HotelWifiPortal.Services
 
             if (user == null)
             {
-                _logger.LogWarning("Admin login failed for username {Username}", username);
+                _logger.LogWarning("Admin login failed - user not found: {Username}", username);
                 return (false, null, "Invalid username or password.");
             }
 
@@ -122,7 +148,7 @@ namespace HotelWifiPortal.Services
                 new Claim(ClaimTypes.Role, "Guest")
             };
 
-            var identity = new ClaimsIdentity(claims, "GuestAuth");
+            var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
             return new ClaimsPrincipal(identity);
         }
 
@@ -137,7 +163,7 @@ namespace HotelWifiPortal.Services
                 new Claim(ClaimTypes.Role, user.Role)
             };
 
-            var identity = new ClaimsIdentity(claims, "AdminAuth");
+            var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
             return new ClaimsPrincipal(identity);
         }
 
@@ -155,7 +181,7 @@ namespace HotelWifiPortal.Services
             if (!string.IsNullOrEmpty(user.RoomNumber))
                 claims.Add(new Claim("RoomNumber", user.RoomNumber));
 
-            var identity = new ClaimsIdentity(claims, "LocalUserAuth");
+            var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
             return new ClaimsPrincipal(identity);
         }
 
@@ -170,7 +196,7 @@ namespace HotelWifiPortal.Services
         {
             var setting = await _dbContext.SystemSettings
                 .FirstOrDefaultAsync(s => s.Key == "EnableStandaloneMode");
-            
+
             return setting?.Value?.ToLower() == "true";
         }
     }

@@ -107,7 +107,10 @@
 
             <form asp-action="Login" method="post">
                 <input type="hidden" asp-for="MacAddress" />
+                <input type="hidden" asp-for="ClientIp" />
                 <input type="hidden" asp-for="ReturnUrl" />
+                <input type="hidden" asp-for="LinkLogin" />
+                <input type="hidden" asp-for="LinkOrig" />
                 
                 <div class="form-floating">
                     <input type="text" class="form-control" asp-for="RoomNumber" placeholder="Room Number" autofocus />
@@ -130,6 +133,23 @@
                     <i class="bi bi-box-arrow-in-right me-2"></i>Connect to WiFi
                 </button>
             </form>
+            
+            @if (!string.IsNullOrEmpty(ViewBag.Error))
+            {
+                <div class="alert alert-warning mt-3 small">
+                    <i class="bi bi-exclamation-triangle me-1"></i>@ViewBag.Error
+                </div>
+            }
+            
+            <!-- Debug info (hidden by default, can be shown for troubleshooting) -->
+            <div class="debug-info mt-3 small text-muted" style="display: none;">
+                <hr>
+                <p class="mb-1"><strong>Debug Info:</strong></p>
+                <p class="mb-0">MAC: @(Model.MacAddress ?? "Not detected")</p>
+                <p class="mb-0">IP: @(Model.ClientIp ?? "Not detected")</p>
+                <p class="mb-0">Link-Login: @(Model.LinkLogin ?? "None")</p>
+                <p class="mb-0">Return URL: @(Model.ReturnUrl ?? "None")</p>
+            </div>
         </div>
 
         <div class="footer-text">

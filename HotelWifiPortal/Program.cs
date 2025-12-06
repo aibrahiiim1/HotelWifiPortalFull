@@ -1,6 +1,7 @@
 using HotelWifiPortal.Data;
 using HotelWifiPortal.Services;
 using HotelWifiPortal.Services.PMS;
+using HotelWifiPortal.Services.Radius;
 using HotelWifiPortal.Services.WiFi;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
@@ -30,6 +31,13 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.SlidingExpiration = true;
         options.Events.OnRedirectToLogin = context =>
         {
+            // For API requests, return 401 instead of redirect
+            if (context.Request.Path.StartsWithSegments("/api"))
+            {
+                context.Response.StatusCode = 401;
+                return Task.CompletedTask;
+            }
+
             // Redirect admin area to admin login
             if (context.Request.Path.StartsWithSegments("/Admin"))
             {
@@ -40,6 +48,17 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
             {
                 context.Response.Redirect(context.RedirectUri);
             }
+            return Task.CompletedTask;
+        };
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            // For API requests, return 403 instead of redirect
+            if (context.Request.Path.StartsWithSegments("/api"))
+            {
+                context.Response.StatusCode = 403;
+                return Task.CompletedTask;
+            }
+            context.Response.Redirect(context.RedirectUri);
             return Task.CompletedTask;
         };
     });
@@ -84,9 +103,19 @@ builder.Services.AddSingleton<FiasProtocolService>();
 builder.Services.AddSingleton<FiasSocketServer>();
 builder.Services.AddHostedService<FiasServerBackgroundService>();
 
+// RADIUS Server (for MikroTik/NAS authentication)
+// Built-in RADIUS server
+builder.Services.AddSingleton<RadiusServer>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<RadiusServer>());
+
+// FreeRADIUS integration (optional external RADIUS)
+builder.Services.AddScoped<FreeRadiusService>();
+builder.Services.AddHostedService<FreeRadiusSyncService>();
+
 // WiFi Services
 builder.Services.AddSingleton<WifiControllerFactory>();
 builder.Services.AddScoped<WifiService>();
+builder.Services.AddScoped<MikrotikAuthService>();
 builder.Services.AddHostedService<WifiMonitoringService>();
 
 // SignalR
@@ -105,7 +134,33 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    dbContext.Database.EnsureCreated();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+    try
+    {
+        dbContext.Database.EnsureCreated();
+
+        // Ensure admin user exists
+        if (!dbContext.AdminUsers.Any(u => u.Username == "admin"))
+        {
+            logger.LogInformation("Creating default admin user...");
+            dbContext.AdminUsers.Add(new HotelWifiPortal.Models.Entities.AdminUser
+            {
+                Username = "admin",
+                PasswordHash = HotelWifiPortal.Data.BCryptHelper.HashPassword("admin123"),
+                Email = "admin@hotel.com",
+                FullName = "System Administrator",
+                Role = "SuperAdmin",
+                IsActive = true
+            });
+            dbContext.SaveChanges();
+            logger.LogInformation("Default admin user created: admin / admin123");
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error initializing database");
+    }
 }
 
 // Configure the HTTP request pipeline
@@ -125,15 +180,20 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 // Route configuration
-app.MapControllerRoute(
-    name: "admin",
-    pattern: "Admin/{controller=Dashboard}/{action=Index}/{id?}");
+app.MapControllers(); // For attribute-routed API controllers
 
+// Portal routes should come FIRST (guest-facing)
 app.MapControllerRoute(
     name: "portal",
     pattern: "Portal/{action=Index}/{id?}",
     defaults: new { controller = "Portal" });
 
+// Admin routes (staff-facing)
+app.MapControllerRoute(
+    name: "admin",
+    pattern: "Admin/{controller=Dashboard}/{action=Index}/{id?}");
+
+// Default route
 app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Portal}/{action=Index}/{id?}");

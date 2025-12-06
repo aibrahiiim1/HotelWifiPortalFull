@@ -92,6 +92,15 @@
                 <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "Wifi" ? "active" : "")" href="/Admin/Settings/Wifi">
                     <i class="bi bi-router"></i>WiFi Controllers
                 </a>
+                <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "Radius" ? "active" : "")" href="/Admin/Settings/radius">
+                    <i class="bi bi-router"></i>Radius Configuration
+                </a>
+                <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "Debug" ? "active" : "")" href="/Admin/Settings/debug">
+                    <i class="bi bi-router"></i>Debug
+                </a>
+                <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "FreeRadius" ? "active" : "")" href="/Admin/Settings/FreeRadius">
+                    <i class="bi bi-router"></i>Debug
+                </a>
             </nav>
         </div>
 

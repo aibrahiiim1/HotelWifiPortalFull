@@ -1,0 +1,180 @@
+@model WifiSettingsViewModel
+@{
+    ViewData["Title"] = Model.Id > 0 ? "Configure Ruckus ZoneDirector" : "Add Ruckus ZoneDirector";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/Admin/Settings/Wifi">WiFi Controllers</a></li>
+        <li class="breadcrumb-item active">Ruckus ZoneDirector</li>
+    </ol>
+</nav>
+
+<div class="row">
+    <div class="col-lg-8">
+        <form action="/Admin/Settings/SaveRuckusZD" method="post">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="Id" value="@Model.Id" />
+            <input type="hidden" name="ControllerType" value="RuckusZD" />
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-broadcast me-2"></i>ZoneDirector Connection Settings
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Controller Name <span class="text-danger">*</span></label>
+                            <input type="text" name="Name" class="form-control" placeholder="e.g., Main ZoneDirector" value="@Model.Name" required />
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch mt-4">
+                                <input type="hidden" name="IsEnabled" value="false" />
+                                <input type="checkbox" name="IsEnabled" class="form-check-input" value="true" @(Model.IsEnabled ? "checked" : "") />
+                                <label class="form-check-label">Enable Controller</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-8">
+                            <label class="form-label">ZoneDirector IP Address <span class="text-danger">*</span></label>
+                            <input type="text" name="IpAddress" class="form-control" placeholder="192.168.1.2" value="@Model.IpAddress" required />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Web Port</label>
+                            <input type="number" name="Port" class="form-control" placeholder="Default: 443" value="@Model.Port" />
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Admin Username</label>
+                            <input type="text" name="Username" class="form-control" placeholder="admin" value="@Model.Username" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Admin Password</label>
+                            <input type="password" name="Password" class="form-control" value="@Model.Password" />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input type="hidden" name="UseHttps" value="false" />
+                                <input type="checkbox" name="UseHttps" class="form-check-input" value="true" @(Model.UseHttps ? "checked" : "") />
+                                <label class="form-check-label">Use HTTPS</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input type="hidden" name="IgnoreSslErrors" value="false" />
+                                <input type="checkbox" name="IgnoreSslErrors" class="form-check-input" value="true" @(Model.IgnoreSslErrors ? "checked" : "") />
+                                <label class="form-check-label">Ignore SSL Certificate Errors</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-gear me-2"></i>WLAN Settings
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Guest WLAN Name</label>
+                        <input type="text" name="GuestWlan" class="form-control" placeholder="Guest-WiFi" />
+                        <small class="text-muted">The SSID/WLAN name for guest access</small>
+                    </div>
+
+                    <div class="form-check form-switch">
+                        <input type="hidden" name="IsDefault" value="false" />
+                                <input type="checkbox" name="IsDefault" class="form-check-input" value="true" @(Model.IsDefault ? "checked" : "") />
+                        <label class="form-check-label">Set as Default Controller</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between">
+                <a href="/Admin/Settings/Wifi" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back
+                </a>
+                <div>
+                    @if (Model.Id > 0)
+                    {
+                        <button type="button" class="btn btn-success me-2" onclick="testConnection()">
+                            <i class="bi bi-plug me-1"></i>Test Connection
+                        </button>
+                    }
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>Save Configuration
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="col-lg-4">
+        @if (Model.Id > 0)
+        {
+            <div class="card mb-4">
+                <div class="card-header"><i class="bi bi-activity me-2"></i>Connection Status</div>
+                <div class="card-body text-center">
+                    <span class="badge bg-@(Model.ConnectionStatus == "connected" ? "success" : "warning") fs-5 p-2">
+                        @(Model.ConnectionStatus ?? "Unknown")
+                    </span>
+                </div>
+            </div>
+        }
+
+        <div class="card">
+            <div class="card-header"><i class="bi bi-question-circle me-2"></i>Ruckus ZD Setup Guide</div>
+            <div class="card-body small">
+                <h6>1. Enable Northbound API</h6>
+                <p>Go to <strong>Admin &gt; External Users</strong> and enable the Northbound API.</p>
+                <h6>2. Create API User</h6>
+                <p>Create a user with API access permissions.</p>
+                <h6>3. Configure Guest Access WLAN</h6>
+                <ul>
+                    <li>Guest Access enabled</li>
+                    <li>Guest Pass required</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="testModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plug me-2"></i>Connection Test</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="testResult">
+                <div class="text-center py-4"><div class="spinner-border text-primary"></div><p class="mt-2">Testing...</p></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    function testConnection() {
+        const modal = new bootstrap.Modal(document.getElementById('testModal'));
+        modal.show();
+        fetch('/Admin/Settings/TestWifiConnectionJson?id=@Model.Id', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('testResult').innerHTML = data.success 
+                    ? `<div class="alert alert-success"><i class="bi bi-check-circle me-2"></i>${data.message}</div>`
+                    : `<div class="alert alert-danger"><i class="bi bi-x-circle me-2"></i>${data.message}</div>`;
+            });
+    }
+</script>
+}

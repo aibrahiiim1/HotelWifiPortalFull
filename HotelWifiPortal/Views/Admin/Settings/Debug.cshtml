@@ -1,0 +1,534 @@
+@{
+    ViewData["Title"] = "WiFi Debug & Troubleshooting";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- Live Logs -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-terminal me-2"></i>Live RADIUS/WiFi Logs</span>
+                <div>
+                    <button class="btn btn-sm btn-outline-success" id="startLogs">
+                        <i class="bi bi-play-fill"></i> Start
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" id="stopLogs" disabled>
+                        <i class="bi bi-stop-fill"></i> Stop
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" id="clearLogs">
+                        <i class="bi bi-trash"></i> Clear
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="logContainer" class="bg-dark text-light p-3 font-monospace" style="height: 400px; overflow-y: auto; font-size: 12px;">
+                    <div class="text-muted">Click "Start" to begin monitoring logs...</div>
+                </div>
+            </div>
+            <div class="card-footer">
+                <div class="row">
+                    <div class="col-auto">
+                        <label class="form-label mb-0 small">Filter:</label>
+                    </div>
+                    <div class="col">
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterRadius" checked>
+                            <label class="form-check-label small" for="filterRadius">RADIUS</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterMikrotik" checked>
+                            <label class="form-check-label small" for="filterMikrotik">MikroTik</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterPortal" checked>
+                            <label class="form-check-label small" for="filterPortal">Portal</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterError" checked>
+                            <label class="form-check-label small" for="filterError">Errors</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Tools -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-tools me-2"></i>Test Tools
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <!-- Test RADIUS Auth -->
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-header bg-light">
+                                <small class="fw-bold">Test RADIUS Authentication</small>
+                            </div>
+                            <div class="card-body">
+                                <form id="testRadiusForm">
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="username" placeholder="Username (Room Number)">
+                                    </div>
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="password" placeholder="Password">
+                                    </div>
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="mac" placeholder="MAC Address (AA:BB:CC:DD:EE:FF)">
+                                    </div>
+                                    <button type="submit" class="btn btn-sm btn-primary w-100">
+                                        <i class="bi bi-shield-check me-1"></i>Test Auth
+                                    </button>
+                                </form>
+                                <div id="radiusResult" class="mt-2 small"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Test MikroTik API -->
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-header bg-light">
+                                <small class="fw-bold">Test MikroTik Connection</small>
+                            </div>
+                            <div class="card-body">
+                                <form id="testMikrotikForm">
+                                    <div class="mb-2">
+                                        <select class="form-select form-select-sm" name="endpoint">
+                                            <option value="system/resource">System Info</option>
+                                            <option value="ip/hotspot">Hotspot Servers</option>
+                                            <option value="ip/hotspot/active">Active Sessions</option>
+                                            <option value="ip/hotspot/user">Hotspot Users</option>
+                                            <option value="ip/hotspot/ip-binding">IP Bindings</option>
+                                            <option value="queue/simple">Bandwidth Queues</option>
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="btn btn-sm btn-info w-100">
+                                        <i class="bi bi-router me-1"></i>Query MikroTik
+                                    </button>
+                                </form>
+                                <div id="mikrotikResult" class="mt-2 small" style="max-height: 200px; overflow-y: auto;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Manual MAC Binding -->
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-header bg-light">
+                                <small class="fw-bold">Manual MAC Binding (Bypass)</small>
+                            </div>
+                            <div class="card-body">
+                                <form id="macBindingForm">
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="mac" placeholder="MAC Address">
+                                    </div>
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="ip" placeholder="IP Address (optional)">
+                                    </div>
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="comment" placeholder="Comment" value="Manual bypass">
+                                    </div>
+                                    <button type="submit" class="btn btn-sm btn-success w-100">
+                                        <i class="bi bi-link me-1"></i>Create Binding
+                                    </button>
+                                </form>
+                                <div id="bindingResult" class="mt-2 small"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Send CoA/Disconnect -->
+                    <div class="col-md-6">
+                        <div class="card h-100">
+                            <div class="card-header bg-light">
+                                <small class="fw-bold">RADIUS CoA / Disconnect</small>
+                            </div>
+                            <div class="card-body">
+                                <form id="coaForm">
+                                    <div class="mb-2">
+                                        <input type="text" class="form-control form-control-sm" name="mac" placeholder="MAC Address">
+                                    </div>
+                                    <div class="mb-2">
+                                        <select class="form-select form-select-sm" name="action">
+                                            <option value="disconnect">Disconnect User</option>
+                                            <option value="coa">Change Rate Limit</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-2 coa-rate" style="display: none;">
+                                        <input type="text" class="form-control form-control-sm" name="rateLimit" placeholder="Rate (e.g., 1M/2M)">
+                                    </div>
+                                    <button type="submit" class="btn btn-sm btn-warning w-100">
+                                        <i class="bi bi-broadcast me-1"></i>Send
+                                    </button>
+                                </form>
+                                <div id="coaResult" class="mt-2 small"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Auth Attempts -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-clock-history me-2"></i>Recent Authentication Attempts
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Time</th>
+                            <th>Username</th>
+                            <th>MAC</th>
+                            <th>Method</th>
+                            <th>Result</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="authHistory">
+                        @if (ViewBag.RecentAuths != null)
+                        {
+                            foreach (var auth in ViewBag.RecentAuths)
+                            {
+                                <tr>
+                                    <td class="small">@auth.Time.ToString("HH:mm:ss")</td>
+                                    <td>@auth.Username</td>
+                                    <td class="font-monospace small">@auth.Mac</td>
+                                    <td><span class="badge bg-info">@auth.Method</span></td>
+                                    <td>
+                                        @if (auth.Success)
+                                        {
+                                            <span class="badge bg-success">Success</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-danger">Failed</span>
+                                        }
+                                    </td>
+                                    <td class="small text-muted">@auth.Details</td>
+                                </tr>
+                            }
+                        }
+                        else
+                        {
+                            <tr>
+                                <td colspan="6" class="text-center text-muted">No recent authentication attempts</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <!-- Current Status -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-activity me-2"></i>Current Status
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <span>Built-in RADIUS</span>
+                    <span class="badge @(ViewBag.BuiltinRadiusRunning == true ? "bg-success" : "bg-secondary")">
+                        @(ViewBag.BuiltinRadiusRunning == true ? "Running" : "Stopped")
+                    </span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <span>FreeRADIUS Sync</span>
+                    <span class="badge @(ViewBag.FreeRadiusEnabled == true ? "bg-success" : "bg-secondary")">
+                        @(ViewBag.FreeRadiusEnabled == true ? "Enabled" : "Disabled")
+                    </span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <span>MikroTik Mode</span>
+                    @if (ViewBag.MikrotikApiConfigured == true)
+                    {
+                        <span class="badge @(ViewBag.MikrotikConnected == true ? "bg-success" : "bg-danger")">
+                            API: @(ViewBag.MikrotikConnected == true ? "Connected" : "Disconnected")
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-info">RADIUS Only</span>
+                    }
+                </div>
+                <hr>
+                <dl class="mb-0 small">
+                    <dt>Auth Port</dt>
+                    <dd>UDP @(ViewBag.AuthPort ?? 1812)</dd>
+                    <dt>Acct Port</dt>
+                    <dd>UDP @(ViewBag.AcctPort ?? 1813)</dd>
+                    <dt>CoA Port</dt>
+                    <dd>UDP @(ViewBag.CoAPort ?? 3799)</dd>
+                    @if (!string.IsNullOrEmpty(ViewBag.MikrotikIp as string))
+                    {
+                        <dt>MikroTik IP</dt>
+                        <dd>@ViewBag.MikrotikIp</dd>
+                    }
+                </dl>
+            </div>
+        </div>
+
+        <!-- Auth Method Selection -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-gear me-2"></i>Authentication Method
+            </div>
+            <div class="card-body">
+                <form action="/Admin/Settings/SetAuthMethod" method="post">
+                    @Html.AntiForgeryToken()
+                    <div class="mb-3">
+                        @{
+                            var currentMethod = ViewBag.AuthMethod as string ?? "RADIUS";
+                            var methods = new[] {
+                                ("RADIUS", "RADIUS (Recommended)"),
+                                ("MacBinding", "MAC Binding (requires API)"),
+                                ("HotspotUser", "Hotspot User (requires API)"),
+                                ("HotspotLogin", "Hotspot Login (requires API)")
+                            };
+                        }
+                        <select name="method" class="form-select">
+                            @foreach (var m in methods)
+                            {
+                                if (currentMethod == m.Item1)
+                                {
+                                    @Html.Raw($"<option value=\"{m.Item1}\" selected>{m.Item2}</option>")
+                                }
+                                else
+                                {
+                                    @Html.Raw($"<option value=\"{m.Item1}\">{m.Item2}</option>")
+                                }
+                            }
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Save Preference</button>
+                </form>
+                <hr>
+                <small class="text-muted">
+                    <strong>RADIUS:</strong> MikroTik queries RADIUS server. <span class="text-success">Recommended - no API needed.</span><br>
+                    <strong>MAC Binding:</strong> Creates bypass entry via API.<br>
+                    <strong>Hotspot User:</strong> Creates user account via API.<br>
+                    <strong>Hotspot Login:</strong> Posts credentials to MikroTik hotspot.
+                </small>
+            </div>
+        </div>
+
+        <!-- RADIUS Server Test -->
+        <div class="card mb-4 border-primary">
+            <div class="card-header bg-primary text-white">
+                <i class="bi bi-broadcast me-2"></i>RADIUS Server Status
+            </div>
+            <div class="card-body">
+                <div id="radiusStatus">
+                    <button class="btn btn-primary w-100" onclick="testRadiusServer()">
+                        <i class="bi bi-play-fill me-1"></i>Test RADIUS Server
+                    </button>
+                </div>
+                <div id="radiusResult" class="mt-3" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Quick Links -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-link-45deg me-2"></i>Quick Links
+            </div>
+            <div class="list-group list-group-flush">
+                <a href="/Admin/Settings/Wifi" class="list-group-item list-group-item-action">
+                    <i class="bi bi-router me-2"></i>WiFi Controllers
+                </a>
+                <a href="/Admin/Settings/Radius" class="list-group-item list-group-item-action">
+                    <i class="bi bi-shield me-2"></i>RADIUS Settings
+                </a>
+                <a href="/Admin/Sessions/Active" class="list-group-item list-group-item-action">
+                    <i class="bi bi-people me-2"></i>Active Sessions
+                </a>
+                <a href="/Admin/Logs/Index?category=RADIUS" class="list-group-item list-group-item-action">
+                    <i class="bi bi-journal me-2"></i>System Logs
+                </a>
+            </div>
+        </div>
+
+        <!-- Troubleshooting Tips -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-lightbulb me-2"></i>Troubleshooting Tips
+            </div>
+            <div class="card-body small">
+                <p class="mb-2"><strong>No internet after login?</strong></p>
+                <ul class="mb-3">
+                    <li>Check if MAC address is captured</li>
+                    <li>Verify MikroTik credentials</li>
+                    <li>Try MAC Binding method</li>
+                    <li>Check MikroTik REST API is enabled</li>
+                </ul>
+                
+                <p class="mb-2"><strong>RADIUS not responding?</strong></p>
+                <ul class="mb-3">
+                    <li>Check UDP ports 1812/1813 are open</li>
+                    <li>Verify shared secret matches</li>
+                    <li>Check firewall rules</li>
+                </ul>
+                
+                <p class="mb-2"><strong>MikroTik configuration:</strong></p>
+                <pre class="bg-light p-2 rounded small">/ip service set www-ssl disabled=no
+/ip service set api disabled=no
+/radius add address=YOUR_IP secret=SECRET service=hotspot</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    let logInterval = null;
+    let lastLogId = 0;
+
+    // Start/Stop log monitoring
+    document.getElementById('startLogs').addEventListener('click', function() {
+        this.disabled = true;
+        document.getElementById('stopLogs').disabled = false;
+        fetchLogs();
+        logInterval = setInterval(fetchLogs, 2000);
+    });
+
+    document.getElementById('stopLogs').addEventListener('click', function() {
+        this.disabled = true;
+        document.getElementById('startLogs').disabled = false;
+        clearInterval(logInterval);
+    });
+
+    document.getElementById('clearLogs').addEventListener('click', function() {
+        document.getElementById('logContainer').innerHTML = '<div class="text-muted">Logs cleared...</div>';
+    });
+
+    function fetchLogs() {
+        fetch('/Admin/Settings/GetRecentLogs?since=' + lastLogId)
+            .then(r => r.json())
+            .then(data => {
+                if (data.logs && data.logs.length > 0) {
+                    const container = document.getElementById('logContainer');
+                    data.logs.forEach(log => {
+                        const div = document.createElement('div');
+                        div.className = getLogClass(log.level);
+                        div.innerHTML = `<span class="text-muted">${log.time}</span> [${log.category}] ${log.message}`;
+                        container.appendChild(div);
+                    });
+                    container.scrollTop = container.scrollHeight;
+                    lastLogId = data.lastId;
+                }
+            })
+            .catch(console.error);
+    }
+
+    function getLogClass(level) {
+        switch(level) {
+            case 'Error': return 'text-danger';
+            case 'Warning': return 'text-warning';
+            case 'Information': return 'text-info';
+            default: return 'text-light';
+        }
+    }
+
+    // CoA form show/hide rate limit
+    document.querySelector('select[name="action"]').addEventListener('change', function() {
+        document.querySelector('.coa-rate').style.display = this.value === 'coa' ? 'block' : 'none';
+    });
+
+    // Test RADIUS Server
+    async function testRadiusServer() {
+        const resultDiv = document.getElementById('radiusResult');
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm"></div> Testing...</div>';
+        
+        try {
+            const response = await fetch('/Admin/Settings/TestRadiusServer');
+            const data = await response.json();
+            
+            let html = '<div class="small">';
+            html += `<div class="mb-2"><strong>Mode:</strong> ${data.mode}</div>`;
+            html += `<div class="mb-2"><strong>Auth Port:</strong> ${data.authPort}</div>`;
+            html += `<div class="mb-2"><strong>Acct Port:</strong> ${data.acctPort}</div>`;
+            html += `<div class="mb-2"><strong>Shared Secret:</strong> ${data.sharedSecretConfigured ? '✓ Configured' : '⚠ Using default'}</div>`;
+            
+            if (data.tests && data.tests.length > 0) {
+                html += '<hr><strong>Port Tests:</strong><ul class="mb-2">';
+                data.tests.forEach(t => {
+                    html += `<li class="${t.success ? 'text-success' : 'text-danger'}">${t.name} (${t.port}): ${t.status}</li>`;
+                });
+                html += '</ul>';
+            }
+            
+            html += '<hr><strong>MikroTik Configuration:</strong>';
+            html += '<pre class="bg-dark text-light p-2 rounded mt-2" style="font-size: 10px;">';
+            html += `/radius add address=YOUR_PORTAL_IP secret=${data.sharedSecretConfigured ? '[configured]' : 'radius_secret_change_me'} service=hotspot authentication-port=${data.authPort} accounting-port=${data.acctPort}`;
+            html += '</pre>';
+            
+            html += '</div>';
+            resultDiv.innerHTML = html;
+        } catch (err) {
+            resultDiv.innerHTML = `<div class="text-danger">Error: ${err.message}</div>`;
+        }
+    }
+
+    // Test forms
+    document.getElementById('testRadiusForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const form = new FormData(this);
+        const result = document.getElementById('radiusResult');
+        result.innerHTML = '<div class="text-info">Testing...</div>';
+        
+        try {
+            const response = await fetch('/Admin/Settings/TestRadiusAuth', {
+                method: 'POST',
+                body: form
+            });
+            const data = await response.json();
+            result.innerHTML = data.success 
+                ? `<div class="text-success">✓ Auth successful<br><small>${data.message}</small></div>`
+                : `<div class="text-danger">✗ Auth failed<br><small>${data.error}</small></div>`;
+        } catch (err) {
+            result.innerHTML = `<div class="text-danger">Error: ${err.message}</div>`;
+        }
+    });
+
+    document.getElementById('testMikrotikForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const endpoint = this.querySelector('select[name="endpoint"]').value;
+        const result = document.getElementById('mikrotikResult');
+        result.innerHTML = '<div class="text-info">Querying...</div>';
+        
+        try {
+            const response = await fetch('/Admin/Settings/QueryMikrotik?endpoint=' + encodeURIComponent(endpoint));
+            const data = await response.json();
+            result.innerHTML = `<pre class="bg-light p-2 rounded small mb-0">${JSON.stringify(data, null, 2)}</pre>`;
+        } catch (err) {
+            result.innerHTML = `<div class="text-danger">Error: ${err.message}</div>`;
+        }
+    });
+
+    document.getElementById('macBindingForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const form = new FormData(this);
+        const result = document.getElementById('bindingResult');
+        result.innerHTML = '<div class="text-info">Creating...</div>';
+        
+        try {
+            const response = await fetch('/Admin/Settings/CreateMacBinding', {
+                method: 'POST',
+                body: form
+            });
+            const data = await response.json();
+            result.innerHTML = data.success 
+                ? `<div class="text-success">✓ Binding created</div>`
+                : `<div class="text-danger">✗ Failed: ${data.error}</div>`;
+        } catch (err) {
+            result.innerHTML = `<div class="text-danger">Error: ${err.message}</div>`;
+        }
+    });
+</script>
+}

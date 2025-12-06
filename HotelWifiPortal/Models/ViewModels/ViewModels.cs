@@ -14,8 +14,14 @@ namespace HotelWifiPortal.Models.ViewModels
         [Display(Name = "Reservation Number / Password")]
         public string Password { get; set; } = string.Empty;
 
+        // Client info from MikroTik redirect
         public string? MacAddress { get; set; }
+        public string? ClientIp { get; set; }
         public string? ReturnUrl { get; set; }
+        public string? LinkLogin { get; set; }      // MikroTik login URL
+        public string? LinkOrig { get; set; }       // Original destination
+        public string? SSID { get; set; }
+        
         public string? ErrorMessage { get; set; }
     }
 
@@ -140,10 +146,10 @@ namespace HotelWifiPortal.Models.ViewModels
         public string BadgeColor { get; set; } = "primary";
 
         public int SortOrder { get; set; }
-
+        
         // Alias for views that use DisplayOrder
         public int DisplayOrder { get => SortOrder; set => SortOrder = value; }
-
+        
         public bool IsActive { get; set; } = true;
     }
 
@@ -176,10 +182,10 @@ namespace HotelWifiPortal.Models.ViewModels
         public string BadgeColor { get; set; } = "success";
 
         public int SortOrder { get; set; }
-
+        
         // Alias for views that use DisplayOrder
         public int DisplayOrder { get => SortOrder; set => SortOrder = value; }
-
+        
         public bool IsActive { get; set; } = true;
         public bool IsFeatured { get; set; }
     }
@@ -209,17 +215,13 @@ namespace HotelWifiPortal.Models.ViewModels
         public bool IsActive { get; set; } = true;
     }
 
-
-
     public class WifiSettingsViewModel
     {
         public int Id { get; set; }
 
-        [Required]
         [MaxLength(50)]
         public string ControllerType { get; set; } = string.Empty;
 
-        [Required]
         [MaxLength(100)]
         public string Name { get; set; } = string.Empty;
 
@@ -240,10 +242,21 @@ namespace HotelWifiPortal.Models.ViewModels
         [MaxLength(500)]
         public string? ApiUrl { get; set; }
 
-        public bool UseHttps { get; set; } = true;
-        public bool IgnoreSslErrors { get; set; }
-        public bool IsEnabled { get; set; }
-        public bool IsDefault { get; set; }
+        // MikroTik Hotspot settings
+        [MaxLength(100)]
+        public string? HotspotServer { get; set; }
+
+        [MaxLength(100)]
+        public string? UserProfile { get; set; }
+
+        public bool UseHttps { get; set; } = false;  // Default to HTTP
+        public bool IgnoreSslErrors { get; set; } = true;  // Default to ignore
+        public bool IsEnabled { get; set; } = true;  // Default to enabled
+        public bool IsDefault { get; set; } = false;
+        
+        // Status (read-only, for display)
+        public string? ConnectionStatus { get; set; }
+        public DateTime? LastConnectionTest { get; set; }
     }
 
     public class PmsSettingsViewModel
@@ -352,19 +365,19 @@ namespace HotelWifiPortal.Models.ViewModels
     public class LogsViewModel
     {
         public List<SystemLog> Logs { get; set; } = new();
-
+        
         // Properties used by the new views
         public string? Level { get; set; }
         public string? Category { get; set; }
         public string? Search { get; set; }
         public int Page { get; set; } = 1;
-
+        
         // Properties for backward compatibility with old code
         public string? LevelFilter { get => Level; set => Level = value; }
         public string? CategoryFilter { get => Category; set => Category = value; }
         public string? SearchTerm { get => Search; set => Search = value; }
         public int PageNumber { get => Page; set => Page = value; }
-
+        
         public DateTime? FromDate { get; set; }
         public DateTime? ToDate { get; set; }
         public int TotalCount { get; set; }
@@ -375,31 +388,31 @@ namespace HotelWifiPortal.Models.ViewModels
     public class SystemSettingsViewModel
     {
         public string HotelName { get; set; } = string.Empty;
-
+        
         // Properties used by the new views
         public string? LogoUrl { get; set; }
         public int MaxDevicesPerRoom { get; set; } = 5;
-
+        
         // Properties for backward compatibility with old code
         public string? HotelLogo { get => LogoUrl; set => LogoUrl = value; }
         public int MaxDevicesPerGuest { get => MaxDevicesPerRoom; set => MaxDevicesPerRoom = value; }
         public bool EnableStandaloneMode { get; set; }
         public string DefaultLanguage { get; set; } = "en";
         public string TimeZone { get; set; } = "UTC";
-
+        
         public string? WelcomeMessage { get; set; }
         public string? SupportEmail { get; set; }
         public string? SupportPhone { get; set; }
         public int SessionTimeoutMinutes { get; set; } = 1440;
-
+        
         public int? DefaultBandwidthProfileId { get; set; }
         public List<BandwidthProfile>? BandwidthProfiles { get; set; }
-
+        
         public bool RequireTermsAcceptance { get; set; }
         public bool AllowGuestRegistration { get; set; }
         public bool EnablePaywall { get; set; } = true;
         public bool EnableBandwidthLimiting { get; set; } = true;
-
+        
         public string? TermsAndConditions { get; set; }
     }
 }

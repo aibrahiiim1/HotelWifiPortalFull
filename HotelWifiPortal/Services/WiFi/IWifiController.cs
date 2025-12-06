@@ -27,6 +27,7 @@ namespace HotelWifiPortal.Services.WiFi
         public string? SSID { get; set; }
         public string? AccessPoint { get; set; }
         public DateTime? ConnectedSince { get; set; }
+        public string? Uptime { get; set; }
         public long BytesReceived { get; set; }
         public long BytesSent { get; set; }
         public int? SignalStrength { get; set; }
