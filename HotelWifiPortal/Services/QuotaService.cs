@@ -80,7 +80,58 @@ namespace HotelWifiPortal.Services
             guest.UpdatedAt = DateTime.UtcNow;
 
             await _dbContext.SaveChangesAsync();
+            
+            _logger.LogInformation("Added paid quota for Room {Room}: Package={Package}, NewTotal={Total}GB",
+                guest.RoomNumber, package.Name, guest.TotalQuotaGB);
+
+            // Update FreeRADIUS radreply with new quota limit
+            await UpdateFreeRadiusQuotaAsync(guest);
+
             return true;
+        }
+
+        /// <summary>
+        /// Update FreeRADIUS radreply table with new quota limit for guest
+        /// </summary>
+        private async Task UpdateFreeRadiusQuotaAsync(Guest guest)
+        {
+            try
+            {
+                var settings = await _dbContext.SystemSettings.ToListAsync();
+                var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
+                var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                if (enabled?.ToLower() != "true" || string.IsNullOrEmpty(connStr))
+                {
+                    _logger.LogDebug("FreeRADIUS not configured, skipping quota update");
+                    return;
+                }
+
+                using var connection = new MySqlConnector.MySqlConnection(connStr);
+                await connection.OpenAsync();
+
+                // Calculate remaining quota
+                var remainingQuota = Math.Max(0, guest.TotalQuotaBytes - guest.UsedQuotaBytes);
+                
+                // Update or insert Mikrotik-Total-Limit attribute
+                var sql = $@"
+                    INSERT INTO {prefix}reply (username, attribute, op, value)
+                    VALUES (@username, 'Mikrotik-Total-Limit', ':=', @value)
+                    ON DUPLICATE KEY UPDATE value = @value";
+
+                using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                cmd.Parameters.AddWithValue("@value", remainingQuota.ToString());
+                await cmd.ExecuteNonQueryAsync();
+
+                _logger.LogInformation("Updated FreeRADIUS quota for Room {Room}: {Quota}MB remaining",
+                    guest.RoomNumber, remainingQuota / 1048576.0);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error updating FreeRADIUS quota for guest {Room}", guest.RoomNumber);
+            }
         }
 
         public async Task<(bool IsExhausted, double UsedGB, double TotalGB, double RemainingGB)> CheckGuestQuotaAsync(int guestId)

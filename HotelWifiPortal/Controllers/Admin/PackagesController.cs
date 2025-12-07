@@ -323,7 +323,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault)
                     .ToListAsync();
-                
+
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -405,7 +405,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault && p.Id != id)
                     .ToListAsync();
-                
+
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -491,10 +491,224 @@ namespace HotelWifiPortal.Controllers.Admin
             ViewBag.ToDate = toDate?.ToString("yyyy-MM-dd");
 
             // Stats
-            ViewBag.TotalRevenue = transactions.Where(t => t.Status == "Completed").Sum(t => t.Amount);
+            ViewBag.TotalRevenue = transactions.Where(t => t.Status == "Completed" || t.Status == "PostedToPMS").Sum(t => t.Amount);
             ViewBag.TotalTransactions = transactions.Count;
             ViewBag.PostedToPMS = transactions.Count(t => t.PostedToPMS);
-            ViewBag.PendingPMS = transactions.Count(t => t.Status == "Completed" && !t.PostedToPMS);
+            ViewBag.PendingPMS = transactions.Count(t => (t.Status == "Completed" || t.Status == "PostedToPMS") && !t.PostedToPMS);
+
+            return View(transactions);
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> RetryPmsPost(int id)
+        {
+            var transaction = await _dbContext.PaymentTransactions
+                .Include(t => t.Guest)
+                .FirstOrDefaultAsync(t => t.Id == id);
+
+            if (transaction == null)
+            {
+                TempData["Error"] = "Transaction not found.";
+                return RedirectToAction(nameof(Transactions));
+            }
+
+            if (transaction.PostedToPMS)
+            {
+                TempData["Warning"] = "Transaction already posted to PMS.";
+                return RedirectToAction(nameof(Transactions));
+            }
+
+            try
+            {
+                // Get PMS settings
+                var pmsSettings = await _dbContext.PmsSettings.FirstOrDefaultAsync();
+                if (pmsSettings?.IsEnabled != true)
+                {
+                    TempData["Error"] = "PMS integration is not enabled.";
+                    return RedirectToAction(nameof(Transactions));
+                }
+
+                // Get FIAS server service
+                var fiasServer = HttpContext.RequestServices.GetRequiredService<HotelWifiPortal.Services.PMS.FiasSocketServer>();
+
+                if (!fiasServer.IsConnected)
+                {
+                    TempData["Error"] = "Not connected to PMS. Please check FIAS connection.";
+                    return RedirectToAction(nameof(Transactions));
+                }
+
+                // Post to PMS
+                var description = $"WiFi: {transaction.PackageName}";
+                await fiasServer.PostChargeAsync(
+                    transaction.RoomNumber,
+                    transaction.ReservationNumber,
+                    transaction.Amount,
+                    description);
+
+                // Update transaction
+                transaction.PostedToPMS = true;
+                transaction.PostedToPMSAt = DateTime.UtcNow;
+                transaction.Status = "PostedToPMS";
+                transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Manually posted transaction {Id} to PMS: Room {Room}, Amount {Amount}",
+                    transaction.Id, transaction.RoomNumber, transaction.Amount);
+
+                TempData["Success"] = $"Successfully posted ${transaction.Amount:N2} to Room {transaction.RoomNumber} PMS folio.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to post transaction {Id} to PMS", id);
+                TempData["Error"] = $"Failed to post to PMS: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(Transactions));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> PostAllPendingToPms()
+        {
+            var pendingTransactions = await _dbContext.PaymentTransactions
+                .Where(t => !t.PostedToPMS && (t.Status == "Completed" || t.Status == "PostedToPMS"))
+                .ToListAsync();
+
+            if (!pendingTransactions.Any())
+            {
+                TempData["Warning"] = "No pending transactions to post.";
+                return RedirectToAction(nameof(Transactions));
+            }
+
+            var pmsSettings = await _dbContext.PmsSettings.FirstOrDefaultAsync();
+            if (pmsSettings?.IsEnabled != true)
+            {
+                TempData["Error"] = "PMS integration is not enabled.";
+                return RedirectToAction(nameof(Transactions));
+            }
+
+            var fiasServer = HttpContext.RequestServices.GetRequiredService<HotelWifiPortal.Services.PMS.FiasSocketServer>();
+            if (!fiasServer.IsConnected)
+            {
+                TempData["Error"] = "Not connected to PMS.";
+                return RedirectToAction(nameof(Transactions));
+            }
+
+            int posted = 0;
+            int failed = 0;
+
+            foreach (var transaction in pendingTransactions)
+            {
+                try
+                {
+                    await fiasServer.PostChargeAsync(
+                        transaction.RoomNumber,
+                        transaction.ReservationNumber,
+                        transaction.Amount,
+                        $"WiFi: {transaction.PackageName}");
+
+                    transaction.PostedToPMS = true;
+                    transaction.PostedToPMSAt = DateTime.UtcNow;
+                    transaction.Status = "PostedToPMS";
+                    transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
+                    posted++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to post transaction {Id} to PMS", transaction.Id);
+                    failed++;
+                }
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            if (failed > 0)
+            {
+                TempData["Warning"] = $"Posted {posted} transactions. {failed} failed.";
+            }
+            else
+            {
+                TempData["Success"] = $"Successfully posted {posted} transactions to PMS.";
+            }
+
+            return RedirectToAction(nameof(Transactions));
+        }
+
+        public async Task<IActionResult> ExportTransactions(string? room, string? status, DateTime? fromDate, DateTime? toDate)
+        {
+            var query = _dbContext.PaymentTransactions.AsQueryable();
+
+            if (!string.IsNullOrEmpty(room))
+                query = query.Where(t => t.RoomNumber.Contains(room));
+
+            if (!string.IsNullOrEmpty(status))
+                query = query.Where(t => t.Status == status);
+
+            if (fromDate.HasValue)
+                query = query.Where(t => t.CreatedAt >= fromDate.Value);
+
+            if (toDate.HasValue)
+                query = query.Where(t => t.CreatedAt <= toDate.Value.AddDays(1));
+
+            var transactions = await query.OrderByDescending(t => t.CreatedAt).ToListAsync();
+
+            // Build CSV
+            var csv = new System.Text.StringBuilder();
+            csv.AppendLine("TransactionID,Date,Time,Room,Guest,ReservationNo,Package,Amount,Currency,Status,PostedToPMS,PostedAt");
+
+            foreach (var t in transactions)
+            {
+                csv.AppendLine($"\"{t.TransactionId}\",\"{t.CreatedAt:yyyy-MM-dd}\",\"{t.CreatedAt:HH:mm:ss}\",\"{t.RoomNumber}\",\"{t.GuestName}\",\"{t.ReservationNumber}\",\"{t.PackageName}\",{t.Amount},{t.Currency},{t.Status},{t.PostedToPMS},{t.PostedToPMSAt:yyyy-MM-dd HH:mm:ss}");
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(csv.ToString());
+            var fileName = $"WiFiTransactions_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+
+            return File(bytes, "text/csv", fileName);
+        }
+
+        // Payment Reports
+        public async Task<IActionResult> Reports(DateTime? fromDate, DateTime? toDate)
+        {
+            fromDate ??= DateTime.Today.AddDays(-30);
+            toDate ??= DateTime.Today;
+
+            var transactions = await _dbContext.PaymentTransactions
+                .Where(t => t.CreatedAt >= fromDate.Value && t.CreatedAt <= toDate.Value.AddDays(1))
+                .Where(t => t.Status == "Completed" || t.Status == "PostedToPMS")
+                .ToListAsync();
+
+            // Daily revenue
+            var dailyRevenue = transactions
+                .GroupBy(t => t.CreatedAt.Date)
+                .Select(g => new { Date = g.Key, Revenue = g.Sum(t => t.Amount), Count = g.Count() })
+                .OrderBy(x => x.Date)
+                .ToList();
+
+            // Package breakdown
+            var packageBreakdown = transactions
+                .GroupBy(t => t.PackageName)
+                .Select(g => new { Package = g.Key, Revenue = g.Sum(t => t.Amount), Count = g.Count() })
+                .OrderByDescending(x => x.Revenue)
+                .ToList();
+
+            // Room breakdown (top 10)
+            var roomBreakdown = transactions
+                .GroupBy(t => t.RoomNumber)
+                .Select(g => new { Room = g.Key, Revenue = g.Sum(t => t.Amount), Count = g.Count() })
+                .OrderByDescending(x => x.Revenue)
+                .Take(10)
+                .ToList();
+
+            ViewBag.FromDate = fromDate.Value.ToString("yyyy-MM-dd");
+            ViewBag.ToDate = toDate.Value.ToString("yyyy-MM-dd");
+            ViewBag.TotalRevenue = transactions.Sum(t => t.Amount);
+            ViewBag.TotalTransactions = transactions.Count;
+            ViewBag.AverageTransaction = transactions.Any() ? transactions.Average(t => t.Amount) : 0;
+            ViewBag.DailyRevenue = dailyRevenue;
+            ViewBag.PackageBreakdown = packageBreakdown;
+            ViewBag.RoomBreakdown = roomBreakdown;
 
             return View(transactions);
         }

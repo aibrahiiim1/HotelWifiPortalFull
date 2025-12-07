@@ -77,6 +77,9 @@
                 <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "Transactions" ? "active" : "")" href="/Admin/Packages/Transactions">
                     <i class="bi bi-credit-card"></i>Transactions
                 </a>
+                <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "Reports" ? "active" : "")" href="/Admin/Packages/Reports">
+                    <i class="bi bi-graph-up"></i>Payment Reports
+                </a>
             </nav>
         </div>
 

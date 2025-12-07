@@ -36,6 +36,10 @@ namespace HotelWifiPortal.Services
             if (package == null || !package.IsActive)
                 return (false, null, "Package not available.");
 
+            _logger.LogInformation("=== Processing WiFi Package Purchase ===");
+            _logger.LogInformation("Guest: {Name} (Room {Room})", guest.GuestName, guest.RoomNumber);
+            _logger.LogInformation("Package: {Package}, Price: {Currency} {Price}", package.Name, package.Currency, package.Price);
+
             // Create transaction
             var transaction = new PaymentTransaction
             {
@@ -55,34 +59,60 @@ namespace HotelWifiPortal.Services
             _dbContext.PaymentTransactions.Add(transaction);
             await _dbContext.SaveChangesAsync();
 
+            _logger.LogInformation("Transaction created: {TransactionId}", transaction.TransactionId);
+
             try
             {
                 // Add quota to guest
                 await _quotaService.AddPaidQuotaAsync(guest, package);
+                _logger.LogInformation("Quota added to guest. New total: {Total}GB", guest.TotalQuotaGB);
 
-                // Post charge to PMS
+                // Try to post charge to PMS
                 var pmsSettings = await _dbContext.PmsSettings.FirstOrDefaultAsync();
-                if (pmsSettings?.IsEnabled == true && pmsSettings.AutoPostCharges && _fiasServer.IsConnected)
+                
+                if (pmsSettings?.IsEnabled == true && pmsSettings.AutoPostCharges)
                 {
-                    var description = $"WiFi: {package.Name}";
-                    await _fiasServer.PostChargeAsync(
-                        guest.RoomNumber,
-                        guest.ReservationNumber,
-                        package.Price,
-                        description);
+                    _logger.LogInformation("PMS auto-posting enabled. Attempting to post charge...");
+                    
+                    if (_fiasServer.IsConnected)
+                    {
+                        try
+                        {
+                            var description = $"WiFi: {package.Name}";
+                            await _fiasServer.PostChargeAsync(
+                                guest.RoomNumber,
+                                guest.ReservationNumber,
+                                package.Price,
+                                description);
 
-                    transaction.PostedToPMS = true;
-                    transaction.PostedToPMSAt = DateTime.UtcNow;
-                    transaction.Status = "PostedToPMS";
+                            transaction.PostedToPMS = true;
+                            transaction.PostedToPMSAt = DateTime.UtcNow;
+                            transaction.Status = "PostedToPMS";
+                            transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
+                            transaction.PMSResponse = "Success";
 
-                    _logger.LogInformation("Charge posted to PMS: Room {Room}, Amount {Amount}, Package {Package}",
-                        guest.RoomNumber, package.Price, package.Name);
+                            _logger.LogInformation("✓ Charge posted to PMS successfully: Room {Room}, Amount {Currency} {Amount}",
+                                guest.RoomNumber, package.Currency, package.Price);
+                        }
+                        catch (Exception pmsEx)
+                        {
+                            _logger.LogWarning(pmsEx, "Failed to post to PMS (will retry later): {Error}", pmsEx.Message);
+                            transaction.Status = "Completed";
+                            transaction.PMSResponse = $"Failed: {pmsEx.Message}";
+                            // Don't fail the purchase, just mark as not posted
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("PMS not connected. Charge will need to be posted manually.");
+                        transaction.Status = "Completed";
+                        transaction.PMSResponse = "Not connected to PMS";
+                    }
                 }
                 else
                 {
                     transaction.Status = "Completed";
-                    _logger.LogInformation("Package purchased (PMS posting disabled): Room {Room}, Package {Package}",
-                        guest.RoomNumber, package.Name);
+                    _logger.LogInformation("PMS auto-posting disabled. Transaction completed without PMS posting.");
                 }
 
                 transaction.CompletedAt = DateTime.UtcNow;
@@ -95,15 +125,17 @@ namespace HotelWifiPortal.Services
                     Category = "Payment",
                     Source = "PaymentService",
                     Message = $"Package purchased: {package.Name} for Room {guest.RoomNumber}",
-                    Details = $"Amount: {package.Currency} {package.Price}, TransactionId: {transaction.TransactionId}"
+                    Details = $"Amount: {package.Currency} {package.Price}, TransactionId: {transaction.TransactionId}, PostedToPMS: {transaction.PostedToPMS}"
                 });
                 await _dbContext.SaveChangesAsync();
 
+                _logger.LogInformation("=== Purchase Complete ===");
                 return (true, transaction, null);
             }
             catch (Exception ex)
             {
                 transaction.Status = "Failed";
+                transaction.PMSResponse = $"Error: {ex.Message}";
                 await _dbContext.SaveChangesAsync();
 
                 _logger.LogError(ex, "Payment processing failed for guest {GuestId}", guestId);
@@ -141,7 +173,10 @@ namespace HotelWifiPortal.Services
                 return false;
 
             if (!_fiasServer.IsConnected)
+            {
+                _logger.LogWarning("Cannot retry PMS posting - not connected");
                 return false;
+            }
 
             try
             {
@@ -154,12 +189,18 @@ namespace HotelWifiPortal.Services
                 transaction.PostedToPMS = true;
                 transaction.PostedToPMSAt = DateTime.UtcNow;
                 transaction.Status = "PostedToPMS";
+                transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
+                transaction.PMSResponse = "Success (retry)";
                 await _dbContext.SaveChangesAsync();
 
+                _logger.LogInformation("Successfully retried PMS posting for transaction {Id}", transactionId);
                 return true;
             }
             catch (Exception ex)
             {
+                transaction.PMSResponse = $"Retry failed: {ex.Message}";
+                await _dbContext.SaveChangesAsync();
+                
                 _logger.LogError(ex, "Failed to retry PMS posting for transaction {Id}", transactionId);
                 return false;
             }
@@ -181,6 +222,64 @@ namespace HotelWifiPortal.Services
             var totalCount = transactions.Count;
 
             return (totalRevenue, totalCount);
+        }
+
+        /// <summary>
+        /// Get pending transactions that need to be posted to PMS
+        /// </summary>
+        public async Task<List<PaymentTransaction>> GetPendingPmsPostingsAsync()
+        {
+            return await _dbContext.PaymentTransactions
+                .Where(t => !t.PostedToPMS && (t.Status == "Completed" || t.Status == "PostedToPMS"))
+                .OrderBy(t => t.CreatedAt)
+                .ToListAsync();
+        }
+
+        /// <summary>
+        /// Attempt to post all pending transactions to PMS
+        /// </summary>
+        public async Task<(int Posted, int Failed)> PostAllPendingToPmsAsync()
+        {
+            var pending = await GetPendingPmsPostingsAsync();
+            int posted = 0;
+            int failed = 0;
+
+            if (!_fiasServer.IsConnected)
+            {
+                _logger.LogWarning("Cannot post to PMS - not connected");
+                return (0, pending.Count);
+            }
+
+            foreach (var transaction in pending)
+            {
+                try
+                {
+                    await _fiasServer.PostChargeAsync(
+                        transaction.RoomNumber,
+                        transaction.ReservationNumber,
+                        transaction.Amount,
+                        $"WiFi: {transaction.PackageName}");
+
+                    transaction.PostedToPMS = true;
+                    transaction.PostedToPMSAt = DateTime.UtcNow;
+                    transaction.Status = "PostedToPMS";
+                    transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
+                    transaction.PMSResponse = "Success (batch)";
+                    posted++;
+
+                    _logger.LogInformation("Posted transaction {Id} to PMS: Room {Room}, Amount {Amount}",
+                        transaction.Id, transaction.RoomNumber, transaction.Amount);
+                }
+                catch (Exception ex)
+                {
+                    transaction.PMSResponse = $"Batch failed: {ex.Message}";
+                    failed++;
+                    _logger.LogError(ex, "Failed to post transaction {Id} to PMS", transaction.Id);
+                }
+            }
+
+            await _dbContext.SaveChangesAsync();
+            return (posted, failed);
         }
     }
 }
