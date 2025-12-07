@@ -4,6 +4,7 @@ using HotelWifiPortal.Services.WiFi;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
 
 namespace HotelWifiPortal.Controllers.Admin
 {
@@ -174,8 +175,82 @@ namespace HotelWifiPortal.Controllers.Admin
         [Authorize(Roles = "Admin,SuperAdmin,Manager")]
         public async Task<IActionResult> RefreshUsage()
         {
-            await _wifiService.UpdateSessionUsageAsync();
-            TempData["Success"] = "Session usage data refreshed.";
+            try
+            {
+                // Get settings directly
+                var settings = await _dbContext.SystemSettings.ToListAsync();
+                var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
+                var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                if (enabled?.ToLower() != "true" || string.IsNullOrEmpty(connStr))
+                {
+                    // Fall back to WifiService
+                    await _wifiService.UpdateSessionUsageAsync();
+                    TempData["Success"] = "Session usage refreshed (FreeRADIUS not configured).";
+                    return RedirectToAction(nameof(Active));
+                }
+
+                // Connect to FreeRADIUS database directly
+                using var connection = new MySqlConnection(connStr);
+                await connection.OpenAsync();
+
+                // Get active sessions
+                var sessions = await _dbContext.WifiSessions
+                    .Where(s => s.Status == "Active")
+                    .ToListAsync();
+
+                int updated = 0;
+                foreach (var session in sessions)
+                {
+                    var sql = $@"
+                        SELECT 
+                            COALESCE(SUM(acctinputoctets), 0) as total_input,
+                            COALESCE(SUM(acctoutputoctets), 0) as total_output
+                        FROM {prefix}acct WHERE username = @username";
+
+                    using var cmd = new MySqlConnection(connStr).CreateCommand();
+                    cmd.Connection = connection;
+                    cmd.CommandText = sql;
+                    cmd.Parameters.AddWithValue("@username", session.RoomNumber);
+
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    if (await reader.ReadAsync())
+                    {
+                        var inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                        var outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                        var totalBytes = inputBytes + outputBytes;
+
+                        if (totalBytes > 0)
+                        {
+                            session.BytesDownloaded = inputBytes;
+                            session.BytesUploaded = outputBytes;
+                            session.BytesUsed = totalBytes;
+                            session.LastActivity = DateTime.UtcNow;
+                            updated++;
+
+                            // Also update guest
+                            if (session.GuestId > 0)
+                            {
+                                var guest = await _dbContext.Guests.FindAsync(session.GuestId);
+                                if (guest != null && totalBytes > guest.UsedQuotaBytes)
+                                {
+                                    guest.UsedQuotaBytes = totalBytes;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync();
+                TempData["Success"] = $"Updated usage for {updated} sessions from FreeRADIUS.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error refreshing usage");
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
             return RedirectToAction(nameof(Active));
         }
     }

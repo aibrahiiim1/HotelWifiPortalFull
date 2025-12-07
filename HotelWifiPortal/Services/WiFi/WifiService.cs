@@ -241,7 +241,10 @@ namespace HotelWifiPortal.Services.WiFi
                     .FirstOrDefaultAsync();
 
                 if (freeRadiusEnabled?.ToLower() != "true")
+                {
+                    _logger.LogDebug("FreeRADIUS not enabled, skipping sync");
                     return false;
+                }
 
                 var connectionString = await _dbContext.SystemSettings
                     .Where(s => s.Key == "FreeRadiusConnectionString")
@@ -249,18 +252,23 @@ namespace HotelWifiPortal.Services.WiFi
                     .FirstOrDefaultAsync();
 
                 if (string.IsNullOrEmpty(connectionString))
+                {
+                    _logger.LogWarning("FreeRADIUS connection string is empty");
                     return false;
+                }
 
                 var tablePrefix = await _dbContext.SystemSettings
                     .Where(s => s.Key == "FreeRadiusTablePrefix")
                     .Select(s => s.Value)
                     .FirstOrDefaultAsync() ?? "rad";
 
-                _logger.LogInformation("Syncing usage from FreeRADIUS for {Count} active sessions...", activeSessions.Count);
+                _logger.LogInformation("=== Starting FreeRADIUS Usage Sync ===");
+                _logger.LogInformation("Active sessions to sync: {Count}", activeSessions.Count);
 
                 using var connection = new MySqlConnector.MySqlConnection(connectionString);
                 await connection.OpenAsync();
 
+                // APPROACH 1: Sync active sessions by room number or MAC
                 foreach (var session in activeSessions)
                 {
                     try
@@ -270,8 +278,7 @@ namespace HotelWifiPortal.Services.WiFi
                         var macWithColons = session.MacAddress?.ToUpper() ?? "";
                         var macWithDashes = session.MacAddress?.ToUpper().Replace(":", "-") ?? "";
 
-                        _logger.LogDebug("Querying for Room={Room}, MAC formats: clean={Clean}, colons={Colons}, dashes={Dashes}",
-                            session.RoomNumber, macClean, macWithColons, macWithDashes);
+                        _logger.LogInformation("Syncing session: Room={Room}, MAC={Mac}", session.RoomNumber, session.MacAddress);
 
                         // Query radacct for this session's usage
                         // Match by username (room number) OR various MAC address formats
@@ -360,9 +367,65 @@ namespace HotelWifiPortal.Services.WiFi
                     }
                 }
 
+                // APPROACH 2: Also sync directly to all checked-in guests by room number
+                // This handles cases where the session might not exist but usage does
+                _logger.LogInformation("=== Syncing usage directly to guests ===");
+
+                var checkedInGuests = await _dbContext.Guests
+                    .Where(g => g.Status.ToLower() == "checked-in" ||
+                               g.Status.ToLower() == "checkedin" ||
+                               g.Status == "CheckedIn")
+                    .ToListAsync();
+
+                _logger.LogInformation("Found {Count} checked-in guests to sync", checkedInGuests.Count);
+
+                foreach (var guest in checkedInGuests)
+                {
+                    try
+                    {
+                        var sql = $@"
+                            SELECT 
+                                COALESCE(SUM(acctinputoctets), 0) + 
+                                COALESCE(SUM(CAST(COALESCE(acctinputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_input,
+                                COALESCE(SUM(acctoutputoctets), 0) + 
+                                COALESCE(SUM(CAST(COALESCE(acctoutputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_output
+                            FROM {tablePrefix}acct 
+                            WHERE username = @username";
+
+                        using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                        cmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+
+                        using var reader = await cmd.ExecuteReaderAsync();
+                        if (await reader.ReadAsync())
+                        {
+                            var inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                            var outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                            var totalBytes = inputBytes + outputBytes;
+
+                            if (totalBytes > 0)
+                            {
+                                _logger.LogInformation("Guest Room={Room}: Found {Total}MB usage in radacct, current UsedQuotaBytes={Current}",
+                                    guest.RoomNumber, totalBytes / 1048576.0, guest.UsedQuotaBytes / 1048576.0);
+
+                                if (totalBytes > guest.UsedQuotaBytes)
+                                {
+                                    guest.UsedQuotaBytes = totalBytes;
+                                    _dbContext.Entry(guest).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
+                                    _logger.LogInformation("Updated guest {Room} UsedQuotaBytes to {Total}MB",
+                                        guest.RoomNumber, totalBytes / 1048576.0);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error syncing usage for guest {Room}", guest.RoomNumber);
+                    }
+                }
+
                 // Save all changes
                 var changes = await _dbContext.SaveChangesAsync();
-                _logger.LogInformation("Saved {Changes} changes to database", changes);
+                _logger.LogInformation("=== Sync Complete: Saved {Changes} changes to database ===", changes);
 
                 return true;
             }

@@ -401,10 +401,8 @@ namespace HotelWifiPortal.Services.Radius
                         // Query by room number directly
                         var sql = $@"
                             SELECT 
-                                COALESCE(SUM(acctinputoctets), 0) + 
-                                COALESCE(SUM(CAST(COALESCE(acctinputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_input,
-                                COALESCE(SUM(acctoutputoctets), 0) + 
-                                COALESCE(SUM(CAST(COALESCE(acctoutputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_output
+                                COALESCE(SUM(acctinputoctets), 0) as total_input,
+                                COALESCE(SUM(acctoutputoctets), 0) as total_output
                             FROM {_tablePrefix}acct 
                             WHERE username = @username";
 

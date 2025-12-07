@@ -1764,42 +1764,130 @@ namespace HotelWifiPortal.Controllers.Admin
         [IgnoreAntiforgeryToken]
         public async Task<IActionResult> FreeRadiusSyncAccounting()
         {
+            var logs = new List<string>();
             try
             {
-                using var scope = HttpContext.RequestServices.CreateScope();
-                var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
-                var wifiService = scope.ServiceProvider.GetRequiredService<WifiService>();
+                logs.Add("Starting sync...");
 
-                // Force reload configuration from database
-                await freeRadiusService.LoadConfigurationFromDatabaseAsync();
+                // Get settings directly
+                var settings = await _dbContext.SystemSettings.ToListAsync();
+                var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
+                var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
 
-                // Sync accounting data from FreeRADIUS to guests
-                await freeRadiusService.SyncAccountingToGuestsAsync();
+                logs.Add($"FreeRadiusEnabled: {enabled ?? "null"}");
+                logs.Add($"ConnectionString: {(string.IsNullOrEmpty(connStr) ? "EMPTY" : "SET (" + connStr.Length + " chars)")}");
+                logs.Add($"TablePrefix: {prefix}");
 
-                // Also update session usage
-                await wifiService.UpdateSessionUsageAsync();
+                if (enabled?.ToLower() != "true")
+                {
+                    return Json(new { success = false, message = "FreeRADIUS is not enabled", logs });
+                }
 
-                // Get updated stats
-                var totalGuests = await _dbContext.Guests.Where(g => g.Status.ToLower() == "checked-in").CountAsync();
-                var totalUsageGB = await _dbContext.Guests.SumAsync(g => g.UsedQuotaBytes) / 1073741824.0;
-                var activeSessions = await _dbContext.WifiSessions.CountAsync(s => s.Status == "Active");
+                if (string.IsNullOrEmpty(connStr))
+                {
+                    return Json(new { success = false, message = "Connection string is empty", logs });
+                }
+
+                // Connect to FreeRADIUS database
+                using var connection = new MySqlConnector.MySqlConnection(connStr);
+                await connection.OpenAsync();
+                logs.Add("Connected to FreeRADIUS database");
+
+                // Get checked-in guests
+                var guests = await _dbContext.Guests
+                    .Where(g => g.Status.ToLower() == "checked-in" || g.Status.ToLower() == "checkedin")
+                    .ToListAsync();
+                logs.Add($"Found {guests.Count} checked-in guests");
+
+                // Get active sessions
+                var sessions = await _dbContext.WifiSessions
+                    .Where(s => s.Status == "Active")
+                    .ToListAsync();
+                logs.Add($"Found {sessions.Count} active sessions");
+
+                int updatedGuests = 0;
+                int updatedSessions = 0;
+
+                // Sync each guest
+                foreach (var guest in guests)
+                {
+                    var sql = $@"
+                        SELECT 
+                            COALESCE(SUM(acctinputoctets), 0) as total_input,
+                            COALESCE(SUM(acctoutputoctets), 0) as total_output
+                        FROM {prefix}acct WHERE username = @username";
+
+                    using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                    cmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    if (await reader.ReadAsync())
+                    {
+                        var inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                        var outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                        var totalBytes = inputBytes + outputBytes;
+
+                        if (totalBytes > 0)
+                        {
+                            var oldUsage = guest.UsedQuotaBytes;
+                            guest.UsedQuotaBytes = totalBytes;
+                            updatedGuests++;
+                            logs.Add($"Guest {guest.RoomNumber}: {oldUsage / 1048576.0:N2}MB -> {totalBytes / 1048576.0:N2}MB");
+                        }
+                    }
+                }
+
+                // Sync each session
+                foreach (var session in sessions)
+                {
+                    var sql = $@"
+                        SELECT 
+                            COALESCE(SUM(acctinputoctets), 0) as total_input,
+                            COALESCE(SUM(acctoutputoctets), 0) as total_output
+                        FROM {prefix}acct WHERE username = @username";
+
+                    using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                    cmd.Parameters.AddWithValue("@username", session.RoomNumber);
+
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    if (await reader.ReadAsync())
+                    {
+                        var inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                        var outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                        var totalBytes = inputBytes + outputBytes;
+
+                        if (totalBytes > 0)
+                        {
+                            var oldUsage = session.BytesUsed;
+                            session.BytesDownloaded = inputBytes;
+                            session.BytesUploaded = outputBytes;
+                            session.BytesUsed = totalBytes;
+                            session.LastActivity = DateTime.UtcNow;
+                            updatedSessions++;
+                            logs.Add($"Session {session.Id} (Room {session.RoomNumber}): {oldUsage / 1048576.0:N2}MB -> {totalBytes / 1048576.0:N2}MB");
+                        }
+                    }
+                }
+
+                // Save changes
+                var changes = await _dbContext.SaveChangesAsync();
+                logs.Add($"Saved {changes} changes to database");
 
                 return Json(new
                 {
                     success = true,
-                    message = $"Accounting synced successfully",
-                    stats = new
-                    {
-                        guests = totalGuests,
-                        totalUsageGB = totalUsageGB.ToString("N2"),
-                        activeSessions = activeSessions
-                    }
+                    message = $"Synced {updatedGuests} guests and {updatedSessions} sessions",
+                    updatedGuests,
+                    updatedSessions,
+                    logs
                 });
             }
             catch (Exception ex)
             {
+                logs.Add($"ERROR: {ex.Message}");
                 _logger.LogError(ex, "Error syncing accounting from FreeRADIUS");
-                return Json(new { success = false, message = ex.Message });
+                return Json(new { success = false, message = ex.Message, logs });
             }
         }
 
