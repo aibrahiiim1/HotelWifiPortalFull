@@ -2,6 +2,9 @@
 @{
     ViewData["Title"] = "Guest Details";
     Layout = "~/Views/Shared/_AdminLayout.cshtml";
+    
+    // Sessions are already filtered by RoomNumber in the controller
+    var roomSessions = Model.WifiSessions?.ToList() ?? new List<HotelWifiPortal.Models.Entities.WifiSession>();
 }
 
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -45,15 +48,17 @@
                     
                     <dt class="col-5">Status</dt>
                     <dd class="col-7">
-                        @switch (Model.Status)
+                        @switch (Model.Status?.ToLower())
                         {
-                            case "CheckedIn":
+                            case "checked-in":
+                            case "checkedin":
                                 <span class="badge bg-success">Checked In</span>
                                 break;
-                            case "CheckedOut":
+                            case "checked-out":
+                            case "checkedout":
                                 <span class="badge bg-secondary">Checked Out</span>
                                 break;
-                            case "Reserved":
+                            case "reserved":
                                 <span class="badge bg-info">Reserved</span>
                                 break;
                             default:
@@ -84,13 +89,16 @@
     <div class="col-lg-4">
         <div class="card mb-4">
             <div class="card-header">
-                <i class="bi bi-wifi me-2"></i>WiFi Usage
+                <i class="bi bi-wifi me-2"></i>WiFi Usage (Room @Model.RoomNumber)
             </div>
             <div class="card-body">
                 @{
-                    var usedGB = Model.UsedQuotaBytes / 1073741824.0;
-                    var totalGB = Model.TotalQuotaBytes / 1073741824.0;
-                    var usagePercent = totalGB > 0 ? (usedGB / totalGB * 100) : 0;
+                    // Use integer division to avoid floating point differences
+                    var usedBytes = Model.UsedQuotaBytes;
+                    var totalBytes = Model.TotalQuotaBytes;
+                    var usedGB = usedBytes / 1073741824.0;
+                    var totalGB = totalBytes / 1073741824.0;
+                    var usagePercent = totalBytes > 0 ? (int)((usedBytes * 100) / totalBytes) : 0;
                 }
                 
                 <div class="text-center mb-3">
@@ -101,7 +109,7 @@
                 <div class="progress mb-3" style="height: 25px;">
                     <div class="progress-bar @(usagePercent > 90 ? "bg-danger" : usagePercent > 70 ? "bg-warning" : "bg-success")" 
                          style="width: @usagePercent%;">
-                        @usagePercent.ToString("N0")%
+                        @usagePercent%
                     </div>
                 </div>
 
@@ -110,7 +118,10 @@
                     <dd class="col-6">@(Model.CurrentPackage ?? "Default")</dd>
                     
                     <dt class="col-6">Active Sessions</dt>
-                    <dd class="col-6">@(Model.WifiSessions?.Count(s => s.IsActive) ?? 0)</dd>
+                    <dd class="col-6">@roomSessions.Count(s => s.IsActive)</dd>
+                    
+                    <dt class="col-6">Total Devices</dt>
+                    <dd class="col-6">@roomSessions.Select(s => s.MacAddress).Distinct().Count()</dd>
                     
                     <dt class="col-6">Terms Accepted</dt>
                     <dd class="col-6">
@@ -179,10 +190,11 @@
     </div>
 </div>
 
-<!-- WiFi Sessions -->
+<!-- WiFi Sessions for THIS ROOM ONLY -->
 <div class="card">
-    <div class="card-header">
-        <i class="bi bi-laptop me-2"></i>WiFi Sessions
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-laptop me-2"></i>WiFi Sessions for Room @Model.RoomNumber</span>
+        <span class="badge bg-secondary">@roomSessions.Count sessions</span>
     </div>
     <div class="card-body">
         <div class="table-responsive">
@@ -194,23 +206,23 @@
                         <th>IP Address</th>
                         <th>Started</th>
                         <th>Duration</th>
-                        <th>Data Used</th>
+                        <th>Session Data</th>
                         <th>Status</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @if (Model.WifiSessions != null && Model.WifiSessions.Any())
+                    @if (roomSessions.Any())
                     {
-                        @foreach (var session in Model.WifiSessions.OrderByDescending(s => s.SessionStart))
+                        @foreach (var session in roomSessions.OrderByDescending(s => s.SessionStart))
                         {
-                            <tr>
+                            <tr class="@(session.IsActive ? "table-success" : "")">
                                 <td>
                                     <i class="bi bi-@(session.DeviceType == "Mobile" ? "phone" : session.DeviceType == "Tablet" ? "tablet" : "laptop") me-1"></i>
                                     @(session.DeviceType ?? "Unknown")
                                 </td>
                                 <td><code>@session.MacAddress</code></td>
-                                <td>@session.IpAddress</td>
+                                <td>@(session.IpAddress ?? "-")</td>
                                 <td>@session.SessionStart.ToString("MMM dd HH:mm")</td>
                                 <td>
                                     @{
@@ -226,7 +238,7 @@
                                     }
                                     else
                                     {
-                                        <span class="badge bg-secondary">Ended</span>
+                                        <span class="badge bg-secondary">@session.Status</span>
                                     }
                                 </td>
                                 <td>
@@ -247,7 +259,7 @@
                     {
                         <tr>
                             <td colspan="8" class="text-center py-4 text-muted">
-                                No WiFi sessions found
+                                No WiFi sessions found for this room
                             </td>
                         </tr>
                     }
@@ -255,4 +267,11 @@
             </table>
         </div>
     </div>
+</div>
+
+<!-- Info about session data -->
+<div class="alert alert-info mt-3">
+    <i class="bi bi-info-circle me-2"></i>
+    <strong>Note:</strong> "Session Data" shows data used per individual session (per device). 
+    "WiFi Usage" above shows the total room quota consumed (aggregated from FreeRADIUS by room number).
 </div>

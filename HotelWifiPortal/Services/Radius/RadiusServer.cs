@@ -794,15 +794,11 @@ namespace HotelWifiPortal.Services.Radius
                 // Update guest usage
                 if (session.Guest != null)
                 {
-                    // Calculate new usage since last update
-                    var previousUsage = session.BytesUsed;
-                    var newUsage = inputBytes + outputBytes;
-                    var delta = newUsage - previousUsage;
-
-                    if (delta > 0)
-                    {
-                        session.Guest.UsedQuotaBytes += delta;
-                    }
+                    // NOTE: Do NOT update guest.UsedQuotaBytes here!
+                    // Guest quota is updated from FreeRADIUS radacct aggregated by room number.
+                    // Session bytes are tracked per-MAC for display purposes only.
+                    _logger.LogDebug("Session stop for guest {Room}, session bytes: {Bytes}MB",
+                        session.RoomNumber, (inputBytes + outputBytes) / 1048576.0);
                 }
 
                 await dbContext.SaveChangesAsync();
@@ -865,17 +861,15 @@ namespace HotelWifiPortal.Services.Radius
                 session.BytesUsed = currentTotal;
                 session.LastActivity = DateTime.UtcNow;
 
-                // Update guest usage
-                if (session.Guest != null && delta > 0)
-                {
-                    session.Guest.UsedQuotaBytes += delta;
+                // NOTE: Do NOT update guest.UsedQuotaBytes here!
+                // Guest quota is updated from FreeRADIUS radacct aggregated by room number.
+                // This ensures room-based (not MAC-based) quota tracking.
 
-                    // Check if quota exceeded
-                    if (session.Guest.UsedQuotaBytes >= session.Guest.TotalQuotaBytes)
-                    {
-                        _logger.LogWarning("Quota exceeded for Room {Room}, initiating disconnect", session.RoomNumber);
-                        // The MikroTik will disconnect automatically based on the quota limit we sent
-                    }
+                // Check if session would exceed quota (for logging only)
+                if (session.Guest != null && session.Guest.UsedQuotaBytes >= session.Guest.TotalQuotaBytes)
+                {
+                    _logger.LogDebug("Guest {Room} has exceeded quota, UsedQuotaBytes={Used}, TotalQuotaBytes={Total}",
+                        session.RoomNumber, session.Guest.UsedQuotaBytes, session.Guest.TotalQuotaBytes);
                 }
 
                 await dbContext.SaveChangesAsync();

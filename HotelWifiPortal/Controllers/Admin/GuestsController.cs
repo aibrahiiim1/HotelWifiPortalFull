@@ -85,6 +85,16 @@ namespace HotelWifiPortal.Controllers.Admin
                 return NotFound();
             }
 
+            // Load sessions for THIS ROOM specifically (not by GuestId which may include wrong sessions)
+            // This ensures we only see sessions that were created for this room number
+            var roomSessions = await _dbContext.WifiSessions
+                .Where(s => s.RoomNumber == guest.RoomNumber)
+                .OrderByDescending(s => s.SessionStart)
+                .ToListAsync();
+
+            // Replace the guest's sessions with room-filtered sessions
+            guest.WifiSessions = roomSessions;
+
             var package = await _quotaService.GetPackageForStayLengthAsync(guest.StayLength);
             ViewBag.CurrentPackage = package;
 

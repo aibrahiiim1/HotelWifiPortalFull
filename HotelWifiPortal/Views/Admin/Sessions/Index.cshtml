@@ -5,45 +5,27 @@
 }
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <form method="get" class="d-flex gap-2">
-        <input type="text" name="room" value="@Model.RoomFilter" class="form-control" placeholder="Filter by room..." style="width: 150px;" />
-        <select name="status" class="form-select" style="width: 150px;">
-            <option value="">All Status</option>
-            @{
-                var statuses = new[] { "Active", "QuotaExceeded", "Disconnected", "Blocked", "Merged" };
-            }
-            @foreach (var status in statuses)
-            {
-                if (Model.StatusFilter == status)
-                {
-                    @Html.Raw($"<option value=\"{status}\" selected>{status}</option>")
-                }
-                else
-                {
-                    @Html.Raw($"<option value=\"{status}\">{status}</option>")
-                }
-            }
-        </select>
-        <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i></button>
-    </form>
+    <h2><i class="bi bi-wifi me-2"></i>WiFi Sessions</h2>
     <div class="d-flex gap-2">
-        <a asp-action="Active" class="btn btn-success">
-            <i class="bi bi-broadcast me-1"></i>Live Sessions
+        <a asp-action="RoomUsage" class="btn btn-outline-primary">
+            <i class="bi bi-building me-1"></i>Room Usage
+        </a>
+        <a asp-action="MacUsage" class="btn btn-outline-info">
+            <i class="bi bi-laptop me-1"></i>Device Usage
         </a>
         <div class="btn-group">
             <form asp-action="RefreshUsage" method="post" class="d-inline">
                 @Html.AntiForgeryToken()
-                <button type="submit" class="btn btn-outline-primary">
+                <button type="submit" class="btn btn-outline-success">
                     <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                 </button>
             </form>
-            <button type="button" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown">
-            </button>
+            <button type="button" class="btn btn-outline-success dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown"></button>
             <ul class="dropdown-menu dropdown-menu-end">
                 <li>
                     <form asp-action="CleanupDuplicateSessions" method="post">
                         @Html.AntiForgeryToken()
-                        <button type="submit" class="dropdown-item" onclick="return confirm('Merge duplicate sessions for the same guest+MAC?')">
+                        <button type="submit" class="dropdown-item" onclick="return confirm('Merge duplicate sessions?')">
                             <i class="bi bi-layers me-2"></i>Cleanup Duplicates
                         </button>
                     </form>
@@ -69,18 +51,51 @@
     </div>
 }
 
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-exclamation-triangle me-2"></i>@TempData["Error"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<!-- Filter -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="d-flex gap-2 align-items-center">
+            <input type="text" name="room" value="@Model.RoomFilter" class="form-control" placeholder="Filter by room..." style="width: 150px;" />
+            <select name="status" class="form-select" style="width: 150px;">
+                <option value="">All Status</option>
+                @foreach (var status in new[] { "Active", "QuotaExceeded", "Disconnected", "Blocked", "Merged" })
+                {
+                    <option value="@status" selected="@(Model.StatusFilter == status)">@status</option>
+                }
+            </select>
+            <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i></button>
+            @if (!string.IsNullOrEmpty(Model.StatusFilter) || !string.IsNullOrEmpty(Model.RoomFilter))
+            {
+                <a asp-action="Index" class="btn btn-outline-secondary">Clear</a>
+            }
+        </form>
+    </div>
+</div>
+
 <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-ul me-2"></i>Individual Sessions</span>
+        <small class="text-muted">Each row = one session (same MAC may appear multiple times)</small>
+    </div>
     <div class="table-responsive">
         <table class="table table-hover mb-0">
-            <thead>
+            <thead class="table-light">
                 <tr>
                     <th>Room</th>
                     <th>Guest</th>
                     <th>MAC Address</th>
                     <th>IP Address</th>
-                    <th>Data Used</th>
+                    <th>Started</th>
+                    <th>Session Data</th>
                     <th>Duration</th>
-                    <th>Controller</th>
                     <th>Status</th>
                     <th>Actions</th>
                 </tr>
@@ -94,13 +109,15 @@
                         "Blocked" => "bg-danger",
                         _ => "bg-secondary"
                     };
-                    var rowClass = session.Status == "QuotaExceeded" ? "table-warning" : "";
+                    var rowClass = session.Status == "QuotaExceeded" ? "table-warning" : 
+                                   session.Status == "Active" ? "table-success" : "";
                     
                     <tr class="@rowClass">
                         <td><span class="badge bg-secondary">@session.RoomNumber</span></td>
                         <td>@(session.GuestName ?? session.Guest?.GuestName ?? "-")</td>
                         <td><code class="small">@session.MacAddress</code></td>
                         <td>@(session.IpAddress ?? "-")</td>
+                        <td><small>@session.SessionStart.ToString("MMM dd HH:mm")</small></td>
                         <td>@session.BytesUsedMB.ToString("F1") MB</td>
                         <td>
                             @if (session.SessionDuration.HasValue)
@@ -108,7 +125,6 @@
                                 @session.SessionDuration.Value.ToString(@"hh\:mm\:ss")
                             }
                         </td>
-                        <td><span class="badge bg-info">@(session.ControllerType ?? "-")</span></td>
                         <td>
                             <span class="badge @statusClass">
                                 @if (session.Status == "QuotaExceeded")
@@ -122,7 +138,7 @@
                             @if (session.Status == "Active" || session.Status == "QuotaExceeded")
                             {
                                 <div class="btn-group btn-group-sm">
-                                    <form asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline" onsubmit="return confirm('Disconnect this session?');">
+                                    <form asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline" onsubmit="return confirm('Disconnect?');">
                                         @Html.AntiForgeryToken()
                                         <button type="submit" class="btn btn-outline-warning" title="Disconnect">
                                             <i class="bi bi-plug"></i>
@@ -162,10 +178,20 @@
     <div class="card-body py-2">
         <small class="text-muted">
             <strong>Status:</strong>
-            <span class="badge bg-success ms-2">Active</span> Connected and using WiFi
-            <span class="badge bg-warning text-dark ms-2">QuotaExceeded</span> Quota exhausted - needs upgrade
-            <span class="badge bg-secondary ms-2">Disconnected</span> Session ended
-            <span class="badge bg-danger ms-2">Blocked</span> Device blocked
+            <span class="badge bg-success ms-2">Active</span> Connected
+            <span class="badge bg-warning text-dark ms-2">QuotaExceeded</span> Needs upgrade
+            <span class="badge bg-secondary ms-2">Disconnected</span> Ended
+            <span class="badge bg-danger ms-2">Blocked</span> Blocked
         </small>
     </div>
+</div>
+
+<!-- View Explanation -->
+<div class="alert alert-light border mt-3">
+    <h6><i class="bi bi-info-circle me-2"></i>View Differences:</h6>
+    <ul class="mb-0 small">
+        <li><strong>All Sessions (this view)</strong> - Individual session records. Same MAC appears multiple times if reconnected.</li>
+        <li><strong>Room Usage</strong> - Usage aggregated by room (from Guest quota). Used for billing.</li>
+        <li><strong>Device Usage</strong> - Usage aggregated by MAC address. Shows total data used per device across all sessions.</li>
+    </ul>
 </div>

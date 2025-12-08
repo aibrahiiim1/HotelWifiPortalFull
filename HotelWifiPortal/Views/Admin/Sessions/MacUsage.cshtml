@@ -1,0 +1,156 @@
+@model List<HotelWifiPortal.Controllers.Admin.MacUsageViewModel>
+@{
+    ViewData["Title"] = "Device Usage";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+    var totalUsageBytes = (long)(ViewBag.TotalUsageBytes ?? 0);
+    var totalDevices = (int)(ViewBag.TotalDevices ?? 0);
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-laptop me-2"></i>Device Usage (by MAC Address)</h2>
+    <div class="d-flex gap-2">
+        <a asp-action="Index" class="btn btn-outline-secondary">
+            <i class="bi bi-list me-1"></i>All Sessions
+        </a>
+        <a asp-action="RoomUsage" class="btn btn-outline-primary">
+            <i class="bi bi-building me-1"></i>Room Usage
+        </a>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@totalDevices</h3>
+                <small>Total Devices</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-primary text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@((totalUsageBytes / 1073741824.0).ToString("N2")) GB</h3>
+                <small>Total Usage</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-success text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@Model.Count(m => m.IsCurrentlyActive)</h3>
+                <small>Currently Active</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="d-flex gap-2 align-items-center">
+            <input type="text" name="room" value="@ViewBag.RoomFilter" class="form-control" placeholder="Filter by room..." style="width: 150px;" />
+            <input type="text" name="mac" value="@ViewBag.MacFilter" class="form-control" placeholder="Filter by MAC..." style="width: 200px;" />
+            <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i> Search</button>
+            @if (!string.IsNullOrEmpty((string?)ViewBag.RoomFilter) || !string.IsNullOrEmpty((string?)ViewBag.MacFilter))
+            {
+                <a asp-action="MacUsage" class="btn btn-outline-secondary">Clear</a>
+            }
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>MAC Address</th>
+                        <th>Room</th>
+                        <th>Guest</th>
+                        <th>Total Usage</th>
+                        <th>Download</th>
+                        <th>Upload</th>
+                        <th>Sessions</th>
+                        <th>Status</th>
+                        <th>Last Seen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var device in Model)
+                    {
+                        <tr class="@(device.IsCurrentlyActive ? "table-success" : "")">
+                            <td><code>@device.MacAddress</code></td>
+                            <td><span class="badge bg-secondary">@device.RoomNumber</span></td>
+                            <td>@device.GuestName</td>
+                            <td>
+                                @if (device.TotalGBUsed >= 1)
+                                {
+                                    <span class="fw-bold text-primary">@device.TotalGBUsed.ToString("N2") GB</span>
+                                }
+                                else
+                                {
+                                    <span>@device.TotalMBUsed.ToString("N1") MB</span>
+                                }
+                            </td>
+                            <td>
+                                <small class="text-success">
+                                    <i class="bi bi-arrow-down"></i>
+                                    @((device.TotalBytesDownloaded / 1048576.0).ToString("N1")) MB
+                                </small>
+                            </td>
+                            <td>
+                                <small class="text-danger">
+                                    <i class="bi bi-arrow-up"></i>
+                                    @((device.TotalBytesUploaded / 1048576.0).ToString("N1")) MB
+                                </small>
+                            </td>
+                            <td>@device.SessionCount</td>
+                            <td>
+                                @if (device.IsCurrentlyActive)
+                                {
+                                    <span class="badge bg-success"><i class="bi bi-wifi"></i> Online</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">Offline</span>
+                                }
+                            </td>
+                            <td>
+                                <small>@device.LastSeen.ToString("MMM dd HH:mm")</small>
+                                <br />
+                                <small class="text-muted">First: @device.FirstSeen.ToString("MMM dd")</small>
+                            </td>
+                        </tr>
+                    }
+                    @if (!Model.Any())
+                    {
+                        <tr>
+                            <td colspan="9" class="text-center py-5 text-muted">
+                                <i class="bi bi-laptop fs-1 d-block mb-3"></i>
+                                No device usage data found
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<p class="text-muted text-center mt-3">
+    Showing @Model.Count of @ViewBag.TotalCount devices
+</p>
+
+<!-- Legend -->
+<div class="card mt-3">
+    <div class="card-body py-2">
+        <small class="text-muted">
+            <strong>Note:</strong> This view shows cumulative usage per device (MAC address) across all sessions.
+            <span class="badge bg-success ms-2">Online</span> Device is currently connected.
+            <span class="badge bg-secondary ms-2">Offline</span> Device not connected.
+        </small>
+    </div>
+</div>

@@ -62,33 +62,32 @@
                     <h5 class="mb-0"><i class="bi bi-toggles me-2"></i>Features</h5>
                 </div>
                 <div class="card-body">
-                    <!-- Hidden fields to ensure false is sent when checkbox is unchecked -->
-                    <input type="hidden" name="RequirePasswordResetOnFirstLogin" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="RequirePasswordResetOnFirstLogin" name="RequirePasswordResetOnFirstLogin" value="true" @(Model.RequirePasswordResetOnFirstLogin ? "checked" : "") />
-                        <label class="form-check-label" for="RequirePasswordResetOnFirstLogin">
+                        <input type="hidden" name="RequirePasswordResetOnFirstLogin" id="RequirePasswordResetOnFirstLogin_hidden" value="@(Model.RequirePasswordResetOnFirstLogin ? "true" : "false")" />
+                        <input class="form-check-input" type="checkbox" id="RequirePasswordResetOnFirstLogin_check" @(Model.RequirePasswordResetOnFirstLogin ? "checked" : "") onchange="document.getElementById('RequirePasswordResetOnFirstLogin_hidden').value = this.checked ? 'true' : 'false';" />
+                        <label class="form-check-label" for="RequirePasswordResetOnFirstLogin_check">
                             <strong>Require WiFi Password on First Login</strong>
                             <br /><small class="text-muted">When enabled, guests must set a new numeric WiFi password on their first login. When disabled, guests can login directly with their reservation number.</small>
                         </label>
                     </div>
                     <hr />
                     
-                    <input type="hidden" name="RequireTermsAcceptance" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="RequireTermsAcceptance" name="RequireTermsAcceptance" value="true" @(Model.RequireTermsAcceptance ? "checked" : "") />
-                        <label class="form-check-label" for="RequireTermsAcceptance">Require Terms & Conditions Acceptance</label>
+                        <input type="hidden" name="RequireTermsAcceptance" id="RequireTermsAcceptance_hidden" value="@(Model.RequireTermsAcceptance ? "true" : "false")" />
+                        <input class="form-check-input" type="checkbox" id="RequireTermsAcceptance_check" @(Model.RequireTermsAcceptance ? "checked" : "") onchange="document.getElementById('RequireTermsAcceptance_hidden').value = this.checked ? 'true' : 'false';" />
+                        <label class="form-check-label" for="RequireTermsAcceptance_check">Require Terms & Conditions Acceptance</label>
                     </div>
                     
-                    <input type="hidden" name="AllowGuestRegistration" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="AllowGuestRegistration" name="AllowGuestRegistration" value="true" @(Model.AllowGuestRegistration ? "checked" : "") />
-                        <label class="form-check-label" for="AllowGuestRegistration">Allow Guest Self-Registration</label>
+                        <input type="hidden" name="AllowGuestRegistration" id="AllowGuestRegistration_hidden" value="@(Model.AllowGuestRegistration ? "true" : "false")" />
+                        <input class="form-check-input" type="checkbox" id="AllowGuestRegistration_check" @(Model.AllowGuestRegistration ? "checked" : "") onchange="document.getElementById('AllowGuestRegistration_hidden').value = this.checked ? 'true' : 'false';" />
+                        <label class="form-check-label" for="AllowGuestRegistration_check">Allow Guest Self-Registration</label>
                     </div>
                     
-                    <input type="hidden" name="EnablePaywall" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="EnablePaywall" name="EnablePaywall" value="true" @(Model.EnablePaywall ? "checked" : "") />
-                        <label class="form-check-label" for="EnablePaywall">Enable Paywall When Quota Exceeded</label>
+                        <input type="hidden" name="EnablePaywall" id="EnablePaywall_hidden" value="@(Model.EnablePaywall ? "true" : "false")" />
+                        <input class="form-check-input" type="checkbox" id="EnablePaywall_check" @(Model.EnablePaywall ? "checked" : "") onchange="document.getElementById('EnablePaywall_hidden').value = this.checked ? 'true' : 'false';" />
+                        <label class="form-check-label" for="EnablePaywall_check">Enable Paywall When Quota Exceeded</label>
                     </div>
                 </div>
             </div>

@@ -203,12 +203,9 @@ namespace HotelWifiPortal.Services.WiFi
                             session.BytesUploaded = usage.BytesUploaded;
                             session.LastActivity = DateTime.UtcNow;
 
-                            // Update guest usage
-                            var guest = await _dbContext.Guests.FindAsync(session.GuestId);
-                            if (guest != null)
-                            {
-                                guest.UsedQuotaBytes += newBytes;
-                            }
+                            // NOTE: Do NOT update guest.UsedQuotaBytes here!
+                            // This is per-MAC usage from the controller.
+                            // Guest quota should be updated from FreeRADIUS radacct aggregated by room number.
                         }
                     }
                     else
@@ -278,85 +275,85 @@ namespace HotelWifiPortal.Services.WiFi
                         var macWithColons = session.MacAddress?.ToUpper() ?? "";
                         var macWithDashes = session.MacAddress?.ToUpper().Replace(":", "-") ?? "";
 
-                        _logger.LogInformation("Syncing session: Room={Room}, MAC={Mac}", session.RoomNumber, session.MacAddress);
+                        _logger.LogDebug("Syncing session: Room={Room}, MAC={Mac}, SessionId={SessionId}",
+                            session.RoomNumber, session.MacAddress, session.RadiusSessionId);
 
-                        // Query radacct for this session's usage
-                        // Match by username (room number) OR various MAC address formats
-                        var sql = $@"
-                            SELECT 
-                                COALESCE(SUM(acctinputoctets), 0) as total_input,
-                                COALESCE(SUM(acctoutputoctets), 0) as total_output,
-                                MAX(acctstarttime) as last_start,
-                                MAX(acctstoptime) as last_stop
-                            FROM {tablePrefix}acct 
-                            WHERE username = @username 
-                               OR username = @macClean
-                               OR username = @macWithColons
-                               OR username = @macWithDashes
-                               OR callingstationid = @macClean
-                               OR callingstationid = @macWithColons
-                               OR callingstationid = @macWithDashes
-                               OR LOWER(REPLACE(REPLACE(callingstationid, ':', ''), '-', '')) = @macClean";
+                        long inputBytes = 0, outputBytes = 0;
+                        DateTime? lastStop = null;
 
-                        using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
-                        cmd.Parameters.AddWithValue("@username", session.RoomNumber);
-                        cmd.Parameters.AddWithValue("@macClean", macClean);
-                        cmd.Parameters.AddWithValue("@macWithColons", macWithColons);
-                        cmd.Parameters.AddWithValue("@macWithDashes", macWithDashes);
-
-                        using var reader = await cmd.ExecuteReaderAsync();
-                        if (await reader.ReadAsync())
+                        // If we have a RadiusSessionId, query that specific session only
+                        if (!string.IsNullOrEmpty(session.RadiusSessionId))
                         {
-                            var inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
-                            var outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
-                            var totalBytes = inputBytes + outputBytes;
+                            var sql = $@"
+                                SELECT 
+                                    COALESCE(acctinputoctets, 0) as total_input,
+                                    COALESCE(acctoutputoctets, 0) as total_output,
+                                    acctstoptime
+                                FROM {tablePrefix}acct 
+                                WHERE acctsessionid = @sessionId
+                                LIMIT 1";
 
-                            _logger.LogInformation("Found usage for Room={Room}: Input={Input}MB, Output={Output}MB, Total={Total}MB",
-                                session.RoomNumber, inputBytes / 1048576.0, outputBytes / 1048576.0, totalBytes / 1048576.0);
+                            using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                            cmd.Parameters.AddWithValue("@sessionId", session.RadiusSessionId);
 
-                            if (totalBytes > 0)
+                            using var reader = await cmd.ExecuteReaderAsync();
+                            if (await reader.ReadAsync())
                             {
-                                // Update session - mark as modified to ensure EF tracks it
-                                session.BytesDownloaded = inputBytes;
-                                session.BytesUploaded = outputBytes;
-                                session.BytesUsed = totalBytes;
-                                session.LastActivity = DateTime.UtcNow;
-                                _dbContext.Entry(session).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
-
-                                _logger.LogInformation("Updated session {Id} for Room={Room}: BytesUsed={Total}",
-                                    session.Id, session.RoomNumber, totalBytes);
-
-                                // Update guest usage directly
-                                if (session.GuestId > 0)
-                                {
-                                    var guest = await _dbContext.Guests.FindAsync(session.GuestId);
-                                    if (guest != null)
-                                    {
-                                        var oldUsage = guest.UsedQuotaBytes;
-                                        guest.UsedQuotaBytes = Math.Max(guest.UsedQuotaBytes, totalBytes);
-                                        _dbContext.Entry(guest).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
-
-                                        _logger.LogInformation("Updated guest {GuestId} Room={Room}: Usage {Old}MB -> {New}MB",
-                                            guest.Id, guest.RoomNumber, oldUsage / 1048576.0, guest.UsedQuotaBytes / 1048576.0);
-                                    }
-                                    else
-                                    {
-                                        _logger.LogWarning("Guest not found for GuestId={GuestId}", session.GuestId);
-                                    }
-                                }
-                                else
-                                {
-                                    _logger.LogWarning("Session has no GuestId, skipping guest update");
-                                }
-                            }
-                            else
-                            {
-                                _logger.LogDebug("No usage found in radacct for Room={Room}", session.RoomNumber);
+                                inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                                outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                                lastStop = reader.IsDBNull(2) ? null : reader.GetDateTime(2);
                             }
                         }
                         else
                         {
-                            _logger.LogDebug("No radacct records found for Room={Room}", session.RoomNumber);
+                            // Fallback: Query by room number + MAC for sessions without RadiusSessionId
+                            var sql = $@"
+                                SELECT 
+                                    COALESCE(SUM(acctinputoctets), 0) as total_input,
+                                    COALESCE(SUM(acctoutputoctets), 0) as total_output,
+                                    MAX(acctstoptime) as last_stop
+                                FROM {tablePrefix}acct 
+                                WHERE username = @username 
+                                   AND (callingstationid = @macWithColons 
+                                        OR callingstationid = @macWithDashes
+                                        OR LOWER(REPLACE(REPLACE(callingstationid, ':', ''), '-', '')) = @macClean)";
+
+                            using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                            cmd.Parameters.AddWithValue("@username", session.RoomNumber);
+                            cmd.Parameters.AddWithValue("@macClean", macClean);
+                            cmd.Parameters.AddWithValue("@macWithColons", macWithColons);
+                            cmd.Parameters.AddWithValue("@macWithDashes", macWithDashes);
+
+                            using var reader = await cmd.ExecuteReaderAsync();
+                            if (await reader.ReadAsync())
+                            {
+                                inputBytes = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                                outputBytes = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
+                                lastStop = reader.IsDBNull(2) ? null : reader.GetDateTime(2);
+                            }
+                        }
+
+                        var totalBytes = inputBytes + outputBytes;
+
+                        if (totalBytes > 0)
+                        {
+                            // Update session
+                            session.BytesDownloaded = inputBytes;
+                            session.BytesUploaded = outputBytes;
+                            session.BytesUsed = totalBytes;
+                            session.LastActivity = DateTime.UtcNow;
+
+                            // If session has ended in FreeRADIUS, mark it as Disconnected
+                            if (lastStop.HasValue && session.Status == "Active")
+                            {
+                                session.Status = "Disconnected";
+                                session.SessionEnd = lastStop;
+                            }
+
+                            _dbContext.Entry(session).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
+
+                            _logger.LogDebug("Updated session {Id} for Room={Room} MAC={Mac}: BytesUsed={Total}MB",
+                                session.Id, session.RoomNumber, session.MacAddress, totalBytes / 1048576.0);
                         }
                     }
                     catch (Exception ex)
@@ -487,11 +484,25 @@ namespace HotelWifiPortal.Services.WiFi
                         // Normalize MAC
                         var normalizedMac = mac.ToUpper().Replace("-", ":");
 
-                        // Check if session already exists in portal
-                        var existingSession = await _dbContext.WifiSessions
-                            .FirstOrDefaultAsync(s =>
-                                (s.MacAddress == normalizedMac || s.MacAddress == mac) &&
-                                s.Status == "Active");
+                        // Check if this specific session already exists in portal (by RadiusSessionId)
+                        WifiSession? existingSession = null;
+
+                        if (!string.IsNullOrEmpty(sessionId))
+                        {
+                            existingSession = await _dbContext.WifiSessions
+                                .FirstOrDefaultAsync(s => s.RadiusSessionId == sessionId);
+                        }
+
+                        // Fallback: check by MAC + Room + Active status (only if no sessionId match)
+                        if (existingSession == null)
+                        {
+                            existingSession = await _dbContext.WifiSessions
+                                .FirstOrDefaultAsync(s =>
+                                    (s.MacAddress == normalizedMac || s.MacAddress == mac) &&
+                                    s.RoomNumber == username &&
+                                    s.Status == "Active" &&
+                                    string.IsNullOrEmpty(s.RadiusSessionId));
+                        }
 
                         if (existingSession != null)
                         {
@@ -501,14 +512,15 @@ namespace HotelWifiPortal.Services.WiFi
                             existingSession.BytesUsed = bytesIn + bytesOut;
                             existingSession.LastActivity = DateTime.UtcNow;
                             existingSession.IpAddress = ip;
-                            if (!string.IsNullOrEmpty(sessionId))
+                            if (!string.IsNullOrEmpty(sessionId) && string.IsNullOrEmpty(existingSession.RadiusSessionId))
                                 existingSession.RadiusSessionId = sessionId;
                             continue;
                         }
 
                         // Find guest by username (room number)
                         var guest = await _dbContext.Guests
-                            .FirstOrDefaultAsync(g => g.RoomNumber == username && g.Status == "checked-in");
+                            .FirstOrDefaultAsync(g => g.RoomNumber == username &&
+                                (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"));
 
                         if (guest == null)
                         {
@@ -516,7 +528,7 @@ namespace HotelWifiPortal.Services.WiFi
                             continue;
                         }
 
-                        // Create new session
+                        // Create new session - each radacct record = one session
                         var newSession = new WifiSession
                         {
                             GuestId = guest.Id,
@@ -536,8 +548,8 @@ namespace HotelWifiPortal.Services.WiFi
                         };
 
                         _dbContext.WifiSessions.Add(newSession);
-                        _logger.LogInformation("Created new session from FreeRADIUS: Room={Room}, MAC={Mac}",
-                            guest.RoomNumber, normalizedMac);
+                        _logger.LogInformation("Created new session from FreeRADIUS: Room={Room}, MAC={Mac}, SessionId={SessionId}",
+                            guest.RoomNumber, normalizedMac, sessionId);
                     }
                     catch (Exception ex)
                     {

@@ -1,0 +1,148 @@
+@model List<HotelWifiPortal.Controllers.Admin.RoomUsageViewModel>
+@{
+    ViewData["Title"] = "Room Usage";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+    var totalUsageBytes = (long)(ViewBag.TotalUsageBytes ?? 0);
+    var totalRooms = (int)(ViewBag.TotalRooms ?? 0);
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-building me-2"></i>Room Usage Summary</h2>
+    <div class="d-flex gap-2">
+        <a asp-action="Index" class="btn btn-outline-secondary">
+            <i class="bi bi-list me-1"></i>All Sessions
+        </a>
+        <a asp-action="MacUsage" class="btn btn-outline-info">
+            <i class="bi bi-laptop me-1"></i>Device Usage
+        </a>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card bg-primary text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@totalRooms</h3>
+                <small>Total Rooms</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@((totalUsageBytes / 1073741824.0).ToString("N2")) GB</h3>
+                <small>Total Usage</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-success text-white">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@Model.Sum(r => r.ActiveSessions)</h3>
+                <small>Active Sessions</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="d-flex gap-2 align-items-center">
+            <input type="text" name="room" value="@ViewBag.RoomFilter" class="form-control" placeholder="Filter by room..." style="width: 200px;" />
+            <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i> Search</button>
+            @if (!string.IsNullOrEmpty((string?)ViewBag.RoomFilter))
+            {
+                <a asp-action="RoomUsage" class="btn btn-outline-secondary">Clear</a>
+            }
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Room</th>
+                        <th>Guest</th>
+                        <th>Room Usage</th>
+                        <th>Quota</th>
+                        <th>Devices</th>
+                        <th>Sessions</th>
+                        <th>Status</th>
+                        <th>Last Activity</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var room in Model)
+                    {
+                        var quotaPercent = room.QuotaPercentUsed;
+                        var quotaBarColor = quotaPercent > 100 ? "bg-danger" : quotaPercent > 80 ? "bg-warning" : "bg-success";
+                        <tr class="@(quotaPercent > 100 ? "table-danger" : room.ActiveSessions > 0 ? "table-success" : "")">
+                            <td><strong>@room.RoomNumber</strong></td>
+                            <td>@(room.GuestName ?? "-")</td>
+                            <td>
+                                @if (room.UsedQuotaBytes >= 1073741824)
+                                {
+                                    <span class="fw-bold">@((room.UsedQuotaBytes / 1073741824.0).ToString("N2")) GB</span>
+                                }
+                                else
+                                {
+                                    <span>@((room.UsedQuotaBytes / 1048576.0).ToString("N1")) MB</span>
+                                }
+                            </td>
+                            <td style="min-width: 150px;">
+                                @if (room.TotalQuotaBytes > 0)
+                                {
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar @quotaBarColor" style="width: @Math.Min(quotaPercent, 100)%">
+                                            @quotaPercent%
+                                        </div>
+                                    </div>
+                                    <small class="text-muted">
+                                        @((room.UsedQuotaBytes / 1073741824.0).ToString("N2"))/@((room.TotalQuotaBytes / 1073741824.0).ToString("N2")) GB
+                                    </small>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">No quota set</span>
+                                }
+                            </td>
+                            <td><span class="badge bg-secondary">@room.DeviceCount</span></td>
+                            <td>@room.SessionCount</td>
+                            <td>
+                                @if (room.ActiveSessions > 0)
+                                {
+                                    <span class="badge bg-success">@room.ActiveSessions online</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">offline</span>
+                                }
+                            </td>
+                            <td>
+                                <small>@room.LastActivity.ToString("MMM dd HH:mm")</small>
+                            </td>
+                        </tr>
+                    }
+                    @if (!Model.Any())
+                    {
+                        <tr>
+                            <td colspan="8" class="text-center py-5 text-muted">
+                                <i class="bi bi-building fs-1 d-block mb-3"></i>
+                                No active guests found
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<p class="text-muted text-center mt-3">
+    Showing @Model.Count of @ViewBag.TotalCount rooms
+</p>
