@@ -59,70 +59,48 @@
         <div class="col-lg-6">
             <div class="card mb-4">
                 <div class="card-header">
-                    <h5 class="mb-0"><i class="bi bi-wifi me-2"></i>WiFi Session Settings</h5>
-                </div>
-                <div class="card-body">
-                    <div class="mb-3">
-                        <label class="form-label">Session Timeout (minutes)</label>
-                        <input type="number" class="form-control" name="SessionTimeoutMinutes" value="@Model.SessionTimeoutMinutes" min="5" />
-                        <small class="text-muted">Inactive sessions will be disconnected after this time</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Max Devices Per Room</label>
-                        <input type="number" class="form-control" name="MaxDevicesPerRoom" value="@Model.MaxDevicesPerRoom" min="1" max="20" />
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Default Bandwidth Profile</label>
-                        <select class="form-select" name="DefaultBandwidthProfileId">
-                            <option value="">-- None --</option>
-                            @if (Model.BandwidthProfiles != null)
-                            {
-                                @foreach (var profile in Model.BandwidthProfiles)
-                                {
-                                    if (Model.DefaultBandwidthProfileId == profile.Id)
-                                    {
-                                        @Html.Raw($"<option value=\"{profile.Id}\" selected>{profile.Name} ({profile.DownloadSpeedKbps}/{profile.UploadSpeedKbps} Kbps)</option>")
-                                    }
-                                    else
-                                    {
-                                        @Html.Raw($"<option value=\"{profile.Id}\">{profile.Name} ({profile.DownloadSpeedKbps}/{profile.UploadSpeedKbps} Kbps)</option>")
-                                    }
-                                }
-                            }
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card mb-4">
-                <div class="card-header">
                     <h5 class="mb-0"><i class="bi bi-toggles me-2"></i>Features</h5>
                 </div>
                 <div class="card-body">
+                    <!-- Hidden fields to ensure false is sent when checkbox is unchecked -->
+                    <input type="hidden" name="RequirePasswordResetOnFirstLogin" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" name="RequirePasswordResetOnFirstLogin" value="true" @(Model.RequirePasswordResetOnFirstLogin ? "checked" : "") />
-                        <label class="form-check-label">
+                        <input class="form-check-input" type="checkbox" id="RequirePasswordResetOnFirstLogin" name="RequirePasswordResetOnFirstLogin" value="true" @(Model.RequirePasswordResetOnFirstLogin ? "checked" : "") />
+                        <label class="form-check-label" for="RequirePasswordResetOnFirstLogin">
                             <strong>Require WiFi Password on First Login</strong>
                             <br /><small class="text-muted">When enabled, guests must set a new numeric WiFi password on their first login. When disabled, guests can login directly with their reservation number.</small>
                         </label>
                     </div>
                     <hr />
+                    
+                    <input type="hidden" name="RequireTermsAcceptance" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" name="RequireTermsAcceptance" value="true" @(Model.RequireTermsAcceptance ? "checked" : "") />
-                        <label class="form-check-label">Require Terms & Conditions Acceptance</label>
+                        <input class="form-check-input" type="checkbox" id="RequireTermsAcceptance" name="RequireTermsAcceptance" value="true" @(Model.RequireTermsAcceptance ? "checked" : "") />
+                        <label class="form-check-label" for="RequireTermsAcceptance">Require Terms & Conditions Acceptance</label>
                     </div>
+                    
+                    <input type="hidden" name="AllowGuestRegistration" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" name="AllowGuestRegistration" value="true" @(Model.AllowGuestRegistration ? "checked" : "") />
-                        <label class="form-check-label">Allow Guest Self-Registration</label>
+                        <input class="form-check-input" type="checkbox" id="AllowGuestRegistration" name="AllowGuestRegistration" value="true" @(Model.AllowGuestRegistration ? "checked" : "") />
+                        <label class="form-check-label" for="AllowGuestRegistration">Allow Guest Self-Registration</label>
                     </div>
+                    
+                    <input type="hidden" name="EnablePaywall" value="false" />
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" name="EnablePaywall" value="true" @(Model.EnablePaywall ? "checked" : "") />
-                        <label class="form-check-label">Enable Paywall When Quota Exceeded</label>
+                        <input class="form-check-input" type="checkbox" id="EnablePaywall" name="EnablePaywall" value="true" @(Model.EnablePaywall ? "checked" : "") />
+                        <label class="form-check-label" for="EnablePaywall">Enable Paywall When Quota Exceeded</label>
                     </div>
-                    <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" name="EnableBandwidthLimiting" value="true" @(Model.EnableBandwidthLimiting ? "checked" : "") />
-                        <label class="form-check-label">Enable Bandwidth Limiting</label>
-                    </div>
+                </div>
+            </div>
+            
+            <div class="card mb-4 bg-light">
+                <div class="card-body">
+                    <p class="mb-2"><i class="bi bi-info-circle me-2"></i><strong>Note:</strong></p>
+                    <p class="mb-0 text-muted small">
+                        Speed limits, quota, and maximum devices are configured per package in 
+                        <a href="/Admin/Packages/FreePackages">Free Packages</a> and 
+                        <a href="/Admin/Packages/Paid">Paid Packages</a>.
+                    </p>
                 </div>
             </div>
         </div>
