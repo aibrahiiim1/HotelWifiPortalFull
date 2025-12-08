@@ -97,6 +97,22 @@ namespace HotelWifiPortal.Controllers.Portal
                 originalUrl = null;
             }
 
+            // Check for MikroTik error and translate it
+            string? mikrotikError = null;
+            if (!string.IsNullOrEmpty(error))
+            {
+                _logger.LogWarning("=== MikroTik returned error: {Error} ===", error);
+                mikrotikError = error switch
+                {
+                    "invalid username or password" => "Invalid username or password. Please check your credentials.",
+                    "user already logged in" => "This account is already logged in on another device. Only one device is allowed at a time.",
+                    "session limit reached" => "Maximum number of sessions reached for this account.",
+                    "radius server is not responding" => "Authentication server is not responding. Please try again.",
+                    "not allowed" => "Access not allowed. Please contact reception.",
+                    _ => $"Authentication failed: {error}"
+                };
+            }
+
             // Log all incoming parameters for debugging
             _logger.LogInformation("=== Portal Access ===");
             _logger.LogInformation("MAC: {Mac}", macAddress ?? "none");
@@ -193,7 +209,8 @@ namespace HotelWifiPortal.Controllers.Portal
             ViewBag.HotelName = hotelName;
             ViewBag.WelcomeMessage = welcomeMessage;
             ViewBag.SSID = ssid;
-            ViewBag.Error = error;
+            ViewBag.Error = mikrotikError ?? error;  // Show translated error or raw error
+            ViewBag.MikrotikRawError = error;  // Keep raw error for debugging
 
             var model = new GuestLoginViewModel
             {
@@ -201,7 +218,9 @@ namespace HotelWifiPortal.Controllers.Portal
                 ClientIp = clientIpAddress ?? Request.HttpContext.Connection.RemoteIpAddress?.ToString(),
                 ReturnUrl = originalUrl,
                 LinkLogin = effectiveLinkLogin,
-                LinkOrig = originalUrl
+                LinkOrig = originalUrl,
+                // Set error message if authentication failed at MikroTik
+                ErrorMessage = mikrotikError
             };
 
             _logger.LogInformation("Model LinkLogin: {LinkLogin}", model.LinkLogin ?? "null");
@@ -279,9 +298,13 @@ namespace HotelWifiPortal.Controllers.Portal
 
             // ============================================
             // CHECK IF PASSWORD RESET IS REQUIRED
-            // First-time login requires setting a new WiFi password
+            // Only if the system setting is enabled
             // ============================================
-            if (guest.NeedsPasswordReset)
+            var requirePasswordResetSetting = await _dbContext.SystemSettings
+                .FirstOrDefaultAsync(s => s.Key == "RequirePasswordResetOnFirstLogin");
+            var requirePasswordReset = requirePasswordResetSetting?.Value?.ToLower() != "false"; // Default true
+
+            if (requirePasswordReset && guest.NeedsPasswordReset)
             {
                 _logger.LogInformation("=== Password Reset Required for Room {Room} ===", guest.RoomNumber);
 
@@ -302,6 +325,11 @@ namespace HotelWifiPortal.Controllers.Portal
                 };
 
                 return View("SetPassword", setPasswordModel);
+            }
+            else if (!requirePasswordReset && guest.NeedsPasswordReset)
+            {
+                // Password reset is disabled - just log and continue without forcing password change
+                _logger.LogInformation("Password reset feature disabled, skipping for Room {Room}", guest.RoomNumber);
             }
 
             // ============================================
@@ -918,6 +946,7 @@ namespace HotelWifiPortal.Controllers.Portal
 
         /// <summary>
         /// Helper method to redirect to MikroTik with credentials
+        /// MikroTik hotspot expects credentials via link-login-only URL
         /// </summary>
         private async Task<IActionResult> RedirectToMikrotikAsync(Guest guest, string roomNumber, string password, string linkLogin, string? linkOrig, string? macAddress)
         {
@@ -936,26 +965,58 @@ namespace HotelWifiPortal.Controllers.Portal
                 _logger.LogWarning(ex, "Failed to sync to FreeRADIUS, MikroTik auth may fail");
             }
 
-            // Build the redirect URL back to MikroTik
-            var mikrotikLoginUrl = linkLogin;
+            // Get link-login-only from session if available (this is the direct auth URL)
+            var linkLoginOnly = HttpContext.Session.GetString("LinkLoginOnly");
 
-            // Add credentials to the URL
-            if (mikrotikLoginUrl.Contains("?"))
+            // Build the redirect URL back to MikroTik
+            // MikroTik hotspot authentication works by:
+            // 1. Using link-login-only URL with username and password parameters
+            // 2. The URL format should be: http://{mikrotik}/login?username=XXX&password=XXX
+
+            string mikrotikLoginUrl;
+
+            if (!string.IsNullOrEmpty(linkLoginOnly))
             {
-                mikrotikLoginUrl += $"&username={Uri.EscapeDataString(roomNumber)}&password={Uri.EscapeDataString(password)}";
+                // Use link-login-only - this is the direct authentication URL
+                _logger.LogInformation("Using link-login-only: {Url}", linkLoginOnly);
+                mikrotikLoginUrl = linkLoginOnly;
+
+                // link-login-only already has the format for direct auth
+                // Just add username and password
+                if (mikrotikLoginUrl.Contains("?"))
+                {
+                    mikrotikLoginUrl += $"&username={Uri.EscapeDataString(roomNumber)}&password={Uri.EscapeDataString(password)}";
+                }
+                else
+                {
+                    mikrotikLoginUrl += $"?username={Uri.EscapeDataString(roomNumber)}&password={Uri.EscapeDataString(password)}";
+                }
             }
             else
             {
-                mikrotikLoginUrl += $"?username={Uri.EscapeDataString(roomNumber)}&password={Uri.EscapeDataString(password)}";
+                // Use link-login but modify it for authentication
+                // link-login format: http://192.168.x.x/login?dst=...
+                // We need to add username and password
+                _logger.LogInformation("Using link-login: {Url}", linkLogin);
+                mikrotikLoginUrl = linkLogin;
+
+                if (mikrotikLoginUrl.Contains("?"))
+                {
+                    mikrotikLoginUrl += $"&username={Uri.EscapeDataString(roomNumber)}&password={Uri.EscapeDataString(password)}";
+                }
+                else
+                {
+                    mikrotikLoginUrl += $"?username={Uri.EscapeDataString(roomNumber)}&password={Uri.EscapeDataString(password)}";
+                }
             }
 
-            // Add destination if we have it
-            if (!string.IsNullOrEmpty(linkOrig))
+            // Add destination if we have it and it's not already in the URL
+            if (!string.IsNullOrEmpty(linkOrig) && !mikrotikLoginUrl.Contains("dst="))
             {
                 mikrotikLoginUrl += $"&dst={Uri.EscapeDataString(linkOrig)}";
             }
 
-            _logger.LogInformation("MikroTik Redirect URL: {Url}", mikrotikLoginUrl);
+            _logger.LogInformation("Final MikroTik Redirect URL: {Url}", mikrotikLoginUrl);
 
             // Create authentication cookie for our portal
             var mikrotikPrincipal = _authService.CreateGuestPrincipal(guest);
@@ -1187,6 +1248,7 @@ namespace HotelWifiPortal.Controllers.Portal
 
         /// <summary>
         /// Update FreeRADIUS with the guest's new WiFi password
+        /// Also sets Simultaneous-Use to allow multiple devices per guest
         /// </summary>
         private async Task UpdateFreeRadiusPasswordAsync(Guest guest)
         {
@@ -1196,6 +1258,7 @@ namespace HotelWifiPortal.Controllers.Portal
                 var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
                 var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
                 var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+                var maxDevices = settings.FirstOrDefault(s => s.Key == "MaxDevicesPerGuest")?.Value ?? "5";
 
                 if (enabled?.ToLower() != "true" || string.IsNullOrEmpty(connStr))
                 {
@@ -1235,6 +1298,40 @@ namespace HotelWifiPortal.Controllers.Portal
                     await insertCmd.ExecuteNonQueryAsync();
                     _logger.LogInformation("Created FreeRADIUS user for {Room}", guest.RoomNumber);
                 }
+
+                // Also set Simultaneous-Use for multiple devices
+                try
+                {
+                    using var checkSimCmd = new MySqlConnector.MySqlCommand(
+                        $"SELECT id FROM {prefix}check WHERE username = @username AND attribute = 'Simultaneous-Use'",
+                        connection);
+                    checkSimCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                    var simExists = await checkSimCmd.ExecuteScalarAsync();
+
+                    if (simExists != null)
+                    {
+                        using var updateSimCmd = new MySqlConnector.MySqlCommand(
+                            $"UPDATE {prefix}check SET value = @value WHERE username = @username AND attribute = 'Simultaneous-Use'",
+                            connection);
+                        updateSimCmd.Parameters.AddWithValue("@value", maxDevices);
+                        updateSimCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                        await updateSimCmd.ExecuteNonQueryAsync();
+                    }
+                    else
+                    {
+                        using var insertSimCmd = new MySqlConnector.MySqlCommand(
+                            $"INSERT INTO {prefix}check (username, attribute, op, value) VALUES (@username, 'Simultaneous-Use', ':=', @value)",
+                            connection);
+                        insertSimCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                        insertSimCmd.Parameters.AddWithValue("@value", maxDevices);
+                        await insertSimCmd.ExecuteNonQueryAsync();
+                    }
+                    _logger.LogInformation("Set Simultaneous-Use={Max} for {Room}", maxDevices, guest.RoomNumber);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not set Simultaneous-Use for {Room}", guest.RoomNumber);
+                }
             }
             catch (Exception ex)
             {
@@ -1244,6 +1341,7 @@ namespace HotelWifiPortal.Controllers.Portal
 
         /// <summary>
         /// Sync guest to FreeRADIUS with specific password (for login flow)
+        /// Also sets Simultaneous-Use to allow multiple devices per guest
         /// </summary>
         private async Task SyncGuestToFreeRadiusAsync(Guest guest, string password)
         {
@@ -1253,6 +1351,7 @@ namespace HotelWifiPortal.Controllers.Portal
                 var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
                 var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
                 var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+                var maxDevices = settings.FirstOrDefault(s => s.Key == "MaxDevicesPerGuest")?.Value ?? "5";
 
                 if (enabled?.ToLower() != "true" || string.IsNullOrEmpty(connStr))
                 {
@@ -1263,7 +1362,9 @@ namespace HotelWifiPortal.Controllers.Portal
                 using var connection = new MySqlConnector.MySqlConnection(connStr);
                 await connection.OpenAsync();
 
-                // Check if user exists in radcheck
+                // ============================================
+                // RADCHECK - Password authentication
+                // ============================================
                 using var checkCmd = new MySqlConnector.MySqlCommand(
                     $"SELECT id FROM {prefix}check WHERE username = @username AND attribute = 'Cleartext-Password'",
                     connection);
@@ -1291,6 +1392,46 @@ namespace HotelWifiPortal.Controllers.Portal
                     insertCmd.Parameters.AddWithValue("@password", password);
                     await insertCmd.ExecuteNonQueryAsync();
                     _logger.LogInformation("Created FreeRADIUS user for {Room}", guest.RoomNumber);
+                }
+
+                // ============================================
+                // RADREPLY - Set Simultaneous-Use for multiple devices
+                // This tells RADIUS to allow X concurrent sessions per user
+                // ============================================
+                try
+                {
+                    // Check if Simultaneous-Use already exists in radcheck (some setups use radcheck)
+                    using var checkSimCmd = new MySqlConnector.MySqlCommand(
+                        $"SELECT id FROM {prefix}check WHERE username = @username AND attribute = 'Simultaneous-Use'",
+                        connection);
+                    checkSimCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                    var simExists = await checkSimCmd.ExecuteScalarAsync();
+
+                    if (simExists != null)
+                    {
+                        // Update existing
+                        using var updateSimCmd = new MySqlConnector.MySqlCommand(
+                            $"UPDATE {prefix}check SET value = @value WHERE username = @username AND attribute = 'Simultaneous-Use'",
+                            connection);
+                        updateSimCmd.Parameters.AddWithValue("@value", maxDevices);
+                        updateSimCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                        await updateSimCmd.ExecuteNonQueryAsync();
+                    }
+                    else
+                    {
+                        // Insert Simultaneous-Use attribute to allow multiple devices
+                        using var insertSimCmd = new MySqlConnector.MySqlCommand(
+                            $"INSERT INTO {prefix}check (username, attribute, op, value) VALUES (@username, 'Simultaneous-Use', ':=', @value)",
+                            connection);
+                        insertSimCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                        insertSimCmd.Parameters.AddWithValue("@value", maxDevices);
+                        await insertSimCmd.ExecuteNonQueryAsync();
+                    }
+                    _logger.LogInformation("Set Simultaneous-Use={Max} for {Room}", maxDevices, guest.RoomNumber);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not set Simultaneous-Use for {Room}", guest.RoomNumber);
                 }
             }
             catch (Exception ex)

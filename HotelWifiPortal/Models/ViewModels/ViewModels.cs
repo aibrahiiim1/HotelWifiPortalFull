@@ -469,6 +469,12 @@ namespace HotelWifiPortal.Models.ViewModels
         public bool EnablePaywall { get; set; } = true;
         public bool EnableBandwidthLimiting { get; set; } = true;
 
+        /// <summary>
+        /// When enabled, guests must set a new WiFi password on first login.
+        /// When disabled, guests can login directly with their reservation number.
+        /// </summary>
+        public bool RequirePasswordResetOnFirstLogin { get; set; } = true;
+
         public string? TermsAndConditions { get; set; }
     }
 }

@@ -100,6 +100,14 @@
                 </div>
                 <div class="card-body">
                     <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="RequirePasswordResetOnFirstLogin" value="true" @(Model.RequirePasswordResetOnFirstLogin ? "checked" : "") />
+                        <label class="form-check-label">
+                            <strong>Require WiFi Password on First Login</strong>
+                            <br /><small class="text-muted">When enabled, guests must set a new numeric WiFi password on their first login. When disabled, guests can login directly with their reservation number.</small>
+                        </label>
+                    </div>
+                    <hr />
+                    <div class="form-check form-switch mb-3">
                         <input class="form-check-input" type="checkbox" name="RequireTermsAcceptance" value="true" @(Model.RequireTermsAcceptance ? "checked" : "") />
                         <label class="form-check-label">Require Terms & Conditions Acceptance</label>
                     </div>

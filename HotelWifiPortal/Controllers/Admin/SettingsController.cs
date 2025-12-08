@@ -50,7 +50,13 @@ namespace HotelWifiPortal.Controllers.Admin
                 MaxDevicesPerGuest = int.TryParse(settings.FirstOrDefault(s => s.Key == "MaxDevicesPerGuest")?.Value, out var max) ? max : 5,
                 EnableStandaloneMode = settings.FirstOrDefault(s => s.Key == "EnableStandaloneMode")?.Value?.ToLower() == "true",
                 DefaultLanguage = settings.FirstOrDefault(s => s.Key == "DefaultLanguage")?.Value ?? "en",
-                TimeZone = settings.FirstOrDefault(s => s.Key == "TimeZone")?.Value ?? "UTC"
+                TimeZone = settings.FirstOrDefault(s => s.Key == "TimeZone")?.Value ?? "UTC",
+                RequirePasswordResetOnFirstLogin = settings.FirstOrDefault(s => s.Key == "RequirePasswordResetOnFirstLogin")?.Value?.ToLower() != "false", // Default true
+                RequireTermsAcceptance = settings.FirstOrDefault(s => s.Key == "RequireTermsAcceptance")?.Value?.ToLower() == "true",
+                AllowGuestRegistration = settings.FirstOrDefault(s => s.Key == "AllowGuestRegistration")?.Value?.ToLower() == "true",
+                EnablePaywall = settings.FirstOrDefault(s => s.Key == "EnablePaywall")?.Value?.ToLower() != "false", // Default true
+                EnableBandwidthLimiting = settings.FirstOrDefault(s => s.Key == "EnableBandwidthLimiting")?.Value?.ToLower() != "false", // Default true
+                TermsAndConditions = settings.FirstOrDefault(s => s.Key == "TermsAndConditions")?.Value
             };
 
             return View(model);
@@ -71,7 +77,13 @@ namespace HotelWifiPortal.Controllers.Admin
                 { "MaxDevicesPerGuest", model.MaxDevicesPerGuest.ToString() },
                 { "EnableStandaloneMode", model.EnableStandaloneMode.ToString().ToLower() },
                 { "DefaultLanguage", model.DefaultLanguage },
-                { "TimeZone", model.TimeZone }
+                { "TimeZone", model.TimeZone },
+                { "RequirePasswordResetOnFirstLogin", model.RequirePasswordResetOnFirstLogin.ToString().ToLower() },
+                { "RequireTermsAcceptance", model.RequireTermsAcceptance.ToString().ToLower() },
+                { "AllowGuestRegistration", model.AllowGuestRegistration.ToString().ToLower() },
+                { "EnablePaywall", model.EnablePaywall.ToString().ToLower() },
+                { "EnableBandwidthLimiting", model.EnableBandwidthLimiting.ToString().ToLower() },
+                { "TermsAndConditions", model.TermsAndConditions }
             };
 
             foreach (var kvp in settingsToUpdate)
