@@ -34,28 +34,58 @@ namespace HotelWifiPortal.Services
 
             foreach (var g in allGuestsInRoom)
             {
-                _logger.LogInformation("  - Guest: {Name}, Status: {Status}, ResNum: {Res}, LocalPwd: {Pwd}, Arrival: {Arr}, Departure: {Dep}",
-                    g.GuestName, g.Status, g.ReservationNumber,
-                    string.IsNullOrEmpty(g.LocalPassword) ? "(none)" : "(set)",
-                    g.ArrivalDate.ToString("yyyy-MM-dd"), g.DepartureDate.ToString("yyyy-MM-dd"));
+                _logger.LogInformation("  - Guest: {Name}, Status: {Status}, HasWifiPwd: {HasWifiPwd}, NeedsReset: {NeedsReset}",
+                    g.GuestName, g.Status,
+                    !string.IsNullOrEmpty(g.WifiPassword),
+                    g.PasswordResetRequired);
             }
 
-            // In PMS mode, password is the reservation number or local password
+            // Find checked-in guest first
             var guest = await _dbContext.Guests
                 .FirstOrDefaultAsync(g =>
                     g.RoomNumber == roomNumber &&
-                    (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn" || g.Status == "active") &&
-                    (g.ReservationNumber == password ||
-                     g.ReservationNumber.ToLower() == password.ToLower() ||
-                     g.ReservationNumber.EndsWith(password) || // Last N digits
-                     g.LocalPassword == password ||
-                     (!string.IsNullOrEmpty(g.LocalPassword) && g.LocalPassword.ToLower() == password.ToLower())));
+                    (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn" || g.Status == "active"));
 
             if (guest == null)
             {
-                _logger.LogWarning("Guest authentication failed for room {Room} - no matching guest found", roomNumber);
-                _logger.LogWarning("Check: 1) Status must be 'checked-in', 2) Password must match ReservationNumber or LocalPassword");
+                _logger.LogWarning("Guest authentication failed for room {Room} - no checked-in guest found", roomNumber);
                 return (false, null, "Invalid room number or password. Please check your details and try again.");
+            }
+
+            // Authentication logic:
+            // If WifiPassword is set AND PasswordResetRequired is false -> ONLY accept WifiPassword
+            // Otherwise (first login or reset required) -> Accept ReservationNumber/LocalPassword
+            bool passwordValid = false;
+
+            if (!string.IsNullOrEmpty(guest.WifiPassword) && !guest.PasswordResetRequired)
+            {
+                // Guest has set their WiFi password - ONLY accept that password
+                passwordValid = guest.WifiPassword == password;
+                _logger.LogInformation("Auth mode: WifiPassword only. Valid: {Valid}", passwordValid);
+
+                if (!passwordValid)
+                {
+                    _logger.LogWarning("WiFi password mismatch for room {Room}", roomNumber);
+                    return (false, null, "Invalid password. Please use your WiFi password that you set during first login.");
+                }
+            }
+            else
+            {
+                // First login or password reset required - accept PMS credentials
+                passwordValid =
+                    guest.ReservationNumber == password ||
+                    guest.ReservationNumber.ToLower() == password.ToLower() ||
+                    guest.ReservationNumber.EndsWith(password) || // Last N digits
+                    guest.LocalPassword == password ||
+                    (!string.IsNullOrEmpty(guest.LocalPassword) && guest.LocalPassword.ToLower() == password.ToLower());
+
+                _logger.LogInformation("Auth mode: PMS/First login. Valid: {Valid}", passwordValid);
+
+                if (!passwordValid)
+                {
+                    _logger.LogWarning("PMS password mismatch for room {Room}", roomNumber);
+                    return (false, null, "Invalid room number or password. Please check your details and try again.");
+                }
             }
 
             // Check if guest is still within stay dates
@@ -75,7 +105,8 @@ namespace HotelWifiPortal.Services
                 await _quotaService.AssignFreeQuotaToGuestAsync(guest);
             }
 
-            _logger.LogInformation("Guest authenticated successfully: Room {Room}, Guest {Name}", roomNumber, guest.GuestName);
+            _logger.LogInformation("Guest authenticated successfully: Room {Room}, Guest {Name}, NeedsPasswordReset: {NeedsReset}",
+                roomNumber, guest.GuestName, guest.NeedsPasswordReset);
             return (true, guest, null);
         }
 

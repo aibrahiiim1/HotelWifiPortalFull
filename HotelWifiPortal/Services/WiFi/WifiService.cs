@@ -157,7 +157,7 @@ namespace HotelWifiPortal.Services.WiFi
             return await _dbContext.WifiSessions
                 .Include(s => s.Guest)
                 .Include(s => s.BandwidthProfile)
-                .Where(s => s.Status == "Active")
+                .Where(s => s.Status == "Active" || s.Status == "QuotaExceeded")
                 .OrderByDescending(s => s.SessionStart)
                 .ToListAsync();
         }
@@ -284,10 +284,8 @@ namespace HotelWifiPortal.Services.WiFi
                         // Match by username (room number) OR various MAC address formats
                         var sql = $@"
                             SELECT 
-                                COALESCE(SUM(acctinputoctets), 0) + 
-                                COALESCE(SUM(CAST(COALESCE(acctinputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_input,
-                                COALESCE(SUM(acctoutputoctets), 0) + 
-                                COALESCE(SUM(CAST(COALESCE(acctoutputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_output,
+                                COALESCE(SUM(acctinputoctets), 0) as total_input,
+                                COALESCE(SUM(acctoutputoctets), 0) as total_output,
                                 MAX(acctstarttime) as last_start,
                                 MAX(acctstoptime) as last_stop
                             FROM {tablePrefix}acct 
@@ -385,10 +383,8 @@ namespace HotelWifiPortal.Services.WiFi
                     {
                         var sql = $@"
                             SELECT 
-                                COALESCE(SUM(acctinputoctets), 0) + 
-                                COALESCE(SUM(CAST(COALESCE(acctinputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_input,
-                                COALESCE(SUM(acctoutputoctets), 0) + 
-                                COALESCE(SUM(CAST(COALESCE(acctoutputgigawords, 0) AS UNSIGNED) * 4294967296), 0) as total_output
+                                COALESCE(SUM(acctinputoctets), 0) as total_input,
+                                COALESCE(SUM(acctoutputoctets), 0) as total_output
                             FROM {tablePrefix}acct 
                             WHERE username = @username";
 
@@ -427,12 +423,133 @@ namespace HotelWifiPortal.Services.WiFi
                 var changes = await _dbContext.SaveChangesAsync();
                 _logger.LogInformation("=== Sync Complete: Saved {Changes} changes to database ===", changes);
 
+                // APPROACH 3: Create sessions for active FreeRADIUS sessions that don't exist in portal
+                await CreateMissingSessionsFromFreeRadiusAsync(connection, tablePrefix);
+
                 return true;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error syncing from FreeRADIUS");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Create WifiSession records for active FreeRADIUS sessions that don't exist in portal
+        /// </summary>
+        private async Task CreateMissingSessionsFromFreeRadiusAsync(MySqlConnector.MySqlConnection connection, string tablePrefix)
+        {
+            try
+            {
+                _logger.LogInformation("=== Checking for missing sessions in FreeRADIUS ===");
+
+                // Find active sessions in radacct (acctstoptime IS NULL means active)
+                var sql = $@"
+                    SELECT DISTINCT
+                        username,
+                        callingstationid,
+                        acctsessionid,
+                        acctstarttime,
+                        framedipaddress,
+                        COALESCE(acctinputoctets, 0) as acctinputoctets,
+                        COALESCE(acctoutputoctets, 0) as acctoutputoctets,
+                        COALESCE(acctinputgigawords, 0) as acctinputgigawords,
+                        COALESCE(acctoutputgigawords, 0) as acctoutputgigawords
+                    FROM {tablePrefix}acct 
+                    WHERE acctstoptime IS NULL
+                    ORDER BY acctstarttime DESC";
+
+                using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                var newSessions = new List<(string username, string mac, string sessionId, DateTime start, string ip, long bytesIn, long bytesOut)>();
+                while (await reader.ReadAsync())
+                {
+                    var username = reader.GetString(0);
+                    var mac = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                    var sessionId = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                    var start = reader.IsDBNull(3) ? DateTime.UtcNow : reader.GetDateTime(3);
+                    var ip = reader.IsDBNull(4) ? "" : reader.GetString(4);
+                    var bytesIn = reader.GetInt64(5) + (reader.GetInt64(7) * 4294967296);
+                    var bytesOut = reader.GetInt64(6) + (reader.GetInt64(8) * 4294967296);
+
+                    newSessions.Add((username, mac, sessionId, start, ip, bytesIn, bytesOut));
+                }
+                await reader.CloseAsync();
+
+                _logger.LogInformation("Found {Count} active sessions in FreeRADIUS", newSessions.Count);
+
+                foreach (var (username, mac, sessionId, start, ip, bytesIn, bytesOut) in newSessions)
+                {
+                    try
+                    {
+                        // Normalize MAC
+                        var normalizedMac = mac.ToUpper().Replace("-", ":");
+
+                        // Check if session already exists in portal
+                        var existingSession = await _dbContext.WifiSessions
+                            .FirstOrDefaultAsync(s =>
+                                (s.MacAddress == normalizedMac || s.MacAddress == mac) &&
+                                s.Status == "Active");
+
+                        if (existingSession != null)
+                        {
+                            // Update existing session
+                            existingSession.BytesDownloaded = bytesIn;
+                            existingSession.BytesUploaded = bytesOut;
+                            existingSession.BytesUsed = bytesIn + bytesOut;
+                            existingSession.LastActivity = DateTime.UtcNow;
+                            existingSession.IpAddress = ip;
+                            if (!string.IsNullOrEmpty(sessionId))
+                                existingSession.RadiusSessionId = sessionId;
+                            continue;
+                        }
+
+                        // Find guest by username (room number)
+                        var guest = await _dbContext.Guests
+                            .FirstOrDefaultAsync(g => g.RoomNumber == username && g.Status == "checked-in");
+
+                        if (guest == null)
+                        {
+                            _logger.LogDebug("No checked-in guest found for username {Username}", username);
+                            continue;
+                        }
+
+                        // Create new session
+                        var newSession = new WifiSession
+                        {
+                            GuestId = guest.Id,
+                            RoomNumber = guest.RoomNumber,
+                            GuestName = guest.GuestName,
+                            MacAddress = normalizedMac,
+                            IpAddress = ip,
+                            RadiusSessionId = sessionId,
+                            SessionStart = start,
+                            Status = "Active",
+                            ControllerType = "FreeRADIUS",
+                            AuthMethod = "RADIUS",
+                            LastActivity = DateTime.UtcNow,
+                            BytesDownloaded = bytesIn,
+                            BytesUploaded = bytesOut,
+                            BytesUsed = bytesIn + bytesOut
+                        };
+
+                        _dbContext.WifiSessions.Add(newSession);
+                        _logger.LogInformation("Created new session from FreeRADIUS: Room={Room}, MAC={Mac}",
+                            guest.RoomNumber, normalizedMac);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error creating session for {Username}", username);
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating missing sessions from FreeRADIUS");
             }
         }
 

@@ -9,24 +9,65 @@
         <input type="text" name="room" value="@Model.RoomFilter" class="form-control" placeholder="Filter by room..." style="width: 150px;" />
         <select name="status" class="form-select" style="width: 150px;">
             <option value="">All Status</option>
-            <option value="Active" selected="@(Model.StatusFilter == "Active")">Active</option>
-            <option value="Disconnected" selected="@(Model.StatusFilter == "Disconnected")">Disconnected</option>
-            <option value="Blocked" selected="@(Model.StatusFilter == "Blocked")">Blocked</option>
+            @{
+                var statuses = new[] { "Active", "QuotaExceeded", "Disconnected", "Blocked", "Merged" };
+            }
+            @foreach (var status in statuses)
+            {
+                if (Model.StatusFilter == status)
+                {
+                    @Html.Raw($"<option value=\"{status}\" selected>{status}</option>")
+                }
+                else
+                {
+                    @Html.Raw($"<option value=\"{status}\">{status}</option>")
+                }
+            }
         </select>
         <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i></button>
     </form>
-    <div>
+    <div class="d-flex gap-2">
         <a asp-action="Active" class="btn btn-success">
             <i class="bi bi-broadcast me-1"></i>Live Sessions
         </a>
-        <form asp-action="RefreshUsage" method="post" class="d-inline">
-            @Html.AntiForgeryToken()
-            <button type="submit" class="btn btn-outline-primary">
-                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Usage
+        <div class="btn-group">
+            <form asp-action="RefreshUsage" method="post" class="d-inline">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-outline-primary">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                </button>
+            </form>
+            <button type="button" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown">
             </button>
-        </form>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                    <form asp-action="CleanupDuplicateSessions" method="post">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="dropdown-item" onclick="return confirm('Merge duplicate sessions for the same guest+MAC?')">
+                            <i class="bi bi-layers me-2"></i>Cleanup Duplicates
+                        </button>
+                    </form>
+                </li>
+                <li>
+                    <form asp-action="CloseQuotaExceededSessions" method="post">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="dropdown-item" onclick="return confirm('Close all QuotaExceeded sessions?')">
+                            <i class="bi bi-x-circle me-2"></i>Close Exceeded Sessions
+                        </button>
+                    </form>
+                </li>
+            </ul>
+        </div>
     </div>
 </div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
 
 <div class="card">
     <div class="table-responsive">
@@ -47,10 +88,18 @@
             <tbody>
                 @foreach (var session in Model.Sessions)
                 {
-                    <tr>
+                    var statusClass = session.Status switch {
+                        "Active" => "bg-success",
+                        "QuotaExceeded" => "bg-warning text-dark",
+                        "Blocked" => "bg-danger",
+                        _ => "bg-secondary"
+                    };
+                    var rowClass = session.Status == "QuotaExceeded" ? "table-warning" : "";
+                    
+                    <tr class="@rowClass">
                         <td><span class="badge bg-secondary">@session.RoomNumber</span></td>
                         <td>@(session.GuestName ?? session.Guest?.GuestName ?? "-")</td>
-                        <td><code>@session.MacAddress</code></td>
+                        <td><code class="small">@session.MacAddress</code></td>
                         <td>@(session.IpAddress ?? "-")</td>
                         <td>@session.BytesUsedMB.ToString("F1") MB</td>
                         <td>
@@ -61,12 +110,16 @@
                         </td>
                         <td><span class="badge bg-info">@(session.ControllerType ?? "-")</span></td>
                         <td>
-                            <span class="badge @(session.Status == "Active" ? "bg-success" : session.Status == "Blocked" ? "bg-danger" : "bg-secondary")">
+                            <span class="badge @statusClass">
+                                @if (session.Status == "QuotaExceeded")
+                                {
+                                    <i class="bi bi-exclamation-triangle me-1"></i>
+                                }
                                 @session.Status
                             </span>
                         </td>
                         <td>
-                            @if (session.Status == "Active")
+                            @if (session.Status == "Active" || session.Status == "QuotaExceeded")
                             {
                                 <div class="btn-group btn-group-sm">
                                     <form asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline" onsubmit="return confirm('Disconnect this session?');">
@@ -103,3 +156,16 @@
 <p class="text-muted text-center mt-3">
     Showing @Model.Sessions.Count of @Model.TotalCount sessions
 </p>
+
+<!-- Legend -->
+<div class="card mt-3">
+    <div class="card-body py-2">
+        <small class="text-muted">
+            <strong>Status:</strong>
+            <span class="badge bg-success ms-2">Active</span> Connected and using WiFi
+            <span class="badge bg-warning text-dark ms-2">QuotaExceeded</span> Quota exhausted - needs upgrade
+            <span class="badge bg-secondary ms-2">Disconnected</span> Session ended
+            <span class="badge bg-danger ms-2">Blocked</span> Device blocked
+        </small>
+    </div>
+</div>

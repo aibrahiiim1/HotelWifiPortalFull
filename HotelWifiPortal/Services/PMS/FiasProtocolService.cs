@@ -228,9 +228,9 @@ namespace HotelWifiPortal.Services.PMS
             var guestName = message.GetField("GN");
 
             _logger.LogInformation("=== Guest Check-In Received ===");
-            _logger.LogInformation("Room: {Room}, Reservation: {Res}, Name: {Name}",
+            _logger.LogInformation("Room: {Room}, Reservation: {Res}, Name: {Name}", 
                 roomNumber, reservationNumber, guestName);
-            _logger.LogInformation("All fields: {Fields}",
+            _logger.LogInformation("All fields: {Fields}", 
                 string.Join(", ", message.Fields.Select(f => $"{f.Key}={f.Value}")));
 
             if (string.IsNullOrEmpty(reservationNumber))
@@ -241,7 +241,7 @@ namespace HotelWifiPortal.Services.PMS
             }
 
             var guestKey = !string.IsNullOrEmpty(reservationNumber) ? reservationNumber : roomNumber;
-            if (string.IsNullOrEmpty(guestKey))
+            if (string.IsNullOrEmpty(guestKey)) 
             {
                 _logger.LogWarning("No guest key found - skipping");
                 return null;
@@ -318,7 +318,7 @@ namespace HotelWifiPortal.Services.PMS
                 guest.Status = "checked-out";
                 guest.UpdatedAt = DateTime.UtcNow;
                 await dbContext.SaveChangesAsync();
-
+                
                 _logger.LogInformation("Guest checked out: Room {Room}", roomNumber);
             }
 
@@ -328,7 +328,7 @@ namespace HotelWifiPortal.Services.PMS
         private async Task<string?> HandleGuestChangeAsync(FiasMessage message)
         {
             var reservationNumber = message.GetField("G#");
-
+            
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
 
@@ -382,19 +382,40 @@ namespace HotelWifiPortal.Services.PMS
             });
         }
 
-        public string BuildPostingMessage(string roomNumber, string reservationNumber, decimal amount, string description)
+        public string BuildPostingMessage(string roomNumber, string reservationNumber, decimal amount, string description, bool postByReservationNumber = false)
         {
             var amountCents = ((int)(amount * 100)).ToString();
-
-            return BuildMessage("PS", new Dictionary<string, string>
+            
+            var fields = new Dictionary<string, string>
             {
-                { "RN", roomNumber },
-                { "G#", reservationNumber },
                 { "TA", amountCents },
                 { "CT", description },
                 { "DA", DateTime.Now.ToString("yyMMdd") },
                 { "TI", DateTime.Now.ToString("HHmmss") }
-            });
+            };
+            
+            if (postByReservationNumber && !string.IsNullOrEmpty(reservationNumber))
+            {
+                // Post by reservation number (G# field) - primary identifier
+                fields["G#"] = reservationNumber;
+                // Include room number as secondary reference
+                if (!string.IsNullOrEmpty(roomNumber))
+                {
+                    fields["RN"] = roomNumber;
+                }
+            }
+            else
+            {
+                // Post by room number (RN field) - primary identifier
+                fields["RN"] = roomNumber;
+                // Include reservation number as secondary reference
+                if (!string.IsNullOrEmpty(reservationNumber))
+                {
+                    fields["G#"] = reservationNumber;
+                }
+            }
+            
+            return BuildMessage("PS", fields);
         }
 
         private async Task SaveGuestAsync(Guest guest)
@@ -404,7 +425,7 @@ namespace HotelWifiPortal.Services.PMS
             var quotaService = scope.ServiceProvider.GetRequiredService<QuotaService>();
 
             var existingGuest = await dbContext.Guests.FirstOrDefaultAsync(g => g.ReservationNumber == guest.ReservationNumber);
-
+            
             if (existingGuest != null)
             {
                 existingGuest.RoomNumber = guest.RoomNumber;

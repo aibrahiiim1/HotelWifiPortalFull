@@ -82,7 +82,7 @@ namespace HotelWifiPortal.Services.Radius
         public const byte NasPortType = 61;
         public const byte PortLimit = 62;
         public const byte LoginLatPort = 63;
-        
+
         // MikroTik Vendor Specific Attributes (Vendor ID: 14988)
         public const int MikroTikVendorId = 14988;
         public const byte MikroTikRecvLimit = 1;
@@ -146,7 +146,7 @@ namespace HotelWifiPortal.Services.Radius
                 Code = data[0],
                 Identifier = data[1]
             };
-            
+
             var length = (data[2] << 8) | data[3];
             Array.Copy(data, 4, packet.Authenticator, 0, 16);
 
@@ -225,7 +225,7 @@ namespace HotelWifiPortal.Services.Radius
             packet[3] = (byte)(length & 0xFF);
 
             // For response packets, calculate response authenticator
-            if (Code == RadiusCode.AccessAccept || Code == RadiusCode.AccessReject || 
+            if (Code == RadiusCode.AccessAccept || Code == RadiusCode.AccessReject ||
                 Code == RadiusCode.AccountingResponse)
             {
                 Array.Copy(Authenticator, 0, packet, 4, 16);
@@ -316,10 +316,10 @@ namespace HotelWifiPortal.Services.Radius
 
             var encryptedPassword = values[0];
             var decrypted = new byte[encryptedPassword.Length];
-            
+
             using var md5 = MD5.Create();
             var secretBytes = Encoding.ASCII.GetBytes(sharedSecret);
-            
+
             // First block: MD5(Secret + Authenticator)
             var toHash = new byte[secretBytes.Length + 16];
             secretBytes.CopyTo(toHash, 0);
@@ -346,7 +346,7 @@ namespace HotelWifiPortal.Services.Radius
             // Remove null padding
             int len = Array.IndexOf(decrypted, (byte)0);
             if (len < 0) len = decrypted.Length;
-            
+
             return Encoding.UTF8.GetString(decrypted, 0, len);
         }
     }
@@ -360,16 +360,16 @@ namespace HotelWifiPortal.Services.Radius
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<RadiusServer> _logger;
         private readonly IConfiguration _configuration;
-        
+
         private UdpClient? _authServer;
         private UdpClient? _acctServer;
         private UdpClient? _coaClient;
-        
+
         private string _sharedSecret = "radius_secret";
         private int _authPort = 1812;
         private int _acctPort = 1813;
         private int _coaPort = 3799;
-        
+
         private readonly Dictionary<string, BuiltinRadiusSession> _activeSessions = new();
         private readonly object _sessionLock = new();
 
@@ -378,7 +378,7 @@ namespace HotelWifiPortal.Services.Radius
             _serviceProvider = serviceProvider;
             _logger = logger;
             _configuration = configuration;
-            
+
             // Load configuration
             _sharedSecret = _configuration["Radius:SharedSecret"] ?? "radius_secret";
             _authPort = _configuration.GetValue("Radius:AuthPort", 1812);
@@ -458,7 +458,7 @@ namespace HotelWifiPortal.Services.Radius
             try
             {
                 var request = RadiusPacket.Parse(data);
-                
+
                 if (request.Code != RadiusCode.AccessRequest)
                     return;
 
@@ -469,7 +469,7 @@ namespace HotelWifiPortal.Services.Radius
                 var nasIdentifier = request.GetString(RadiusAttribute.NasIdentifier) ?? "";
                 var nasIp = request.GetIpAddress(RadiusAttribute.NasIpAddress);
 
-                _logger.LogInformation("RADIUS Auth Request: User={User}, MAC={MAC}, NAS={NAS}", 
+                _logger.LogInformation("RADIUS Auth Request: User={User}, MAC={MAC}, NAS={NAS}",
                     username, callingStationId, nasIdentifier);
 
                 // Authenticate user
@@ -507,7 +507,7 @@ namespace HotelWifiPortal.Services.Radius
                         // Split into gigawords and bytes
                         var gigawords = (int)(quotaBytes / 4294967296); // 4GB in bytes
                         var bytes = (int)(quotaBytes % 4294967296);
-                        
+
                         if (gigawords > 0)
                         {
                             response.AddMikroTikAttribute(RadiusAttribute.MikroTikTotalLimitGigawords, gigawords);
@@ -531,7 +531,7 @@ namespace HotelWifiPortal.Services.Radius
                         };
                     }
 
-                    _logger.LogInformation("RADIUS Auth Accept: User={User}, MAC={MAC}, Rate={Rate}", 
+                    _logger.LogInformation("RADIUS Auth Accept: User={User}, MAC={MAC}, Rate={Rate}",
                         username, callingStationId, profile != null ? $"{profile.DownloadSpeedKbps}k/{profile.UploadSpeedKbps}k" : "unlimited");
                 }
                 else
@@ -554,7 +554,7 @@ namespace HotelWifiPortal.Services.Radius
             try
             {
                 var request = RadiusPacket.Parse(data);
-                
+
                 if (request.Code != RadiusCode.AccountingRequest)
                     return;
 
@@ -562,7 +562,7 @@ namespace HotelWifiPortal.Services.Radius
                 var username = request.GetString(RadiusAttribute.UserName) ?? "";
                 var sessionId = request.GetString(RadiusAttribute.AcctSessionId) ?? "";
                 var callingStationId = request.GetString(RadiusAttribute.CallingStationId) ?? "";
-                
+
                 var inputOctets = (long)(request.GetInt(RadiusAttribute.AcctInputOctets) ?? 0);
                 var outputOctets = (long)(request.GetInt(RadiusAttribute.AcctOutputOctets) ?? 0);
                 var inputGigawords = (long)(request.GetInt(RadiusAttribute.AcctInputGigawords) ?? 0);
@@ -575,7 +575,7 @@ namespace HotelWifiPortal.Services.Radius
                 var totalOutputBytes = outputOctets + (outputGigawords * 4294967296);
 
                 _logger.LogInformation("RADIUS Acct: Type={Type}, User={User}, MAC={MAC}, In={In}MB, Out={Out}MB, Time={Time}s",
-                    statusType, username, callingStationId, 
+                    statusType, username, callingStationId,
                     totalInputBytes / 1048576, totalOutputBytes / 1048576, sessionTime);
 
                 // Process based on status type
@@ -584,12 +584,12 @@ namespace HotelWifiPortal.Services.Radius
                     case AcctStatusType.Start:
                         await HandleAccountingStartAsync(username, sessionId, callingStationId);
                         break;
-                    
+
                     case AcctStatusType.Stop:
-                        await HandleAccountingStopAsync(username, sessionId, callingStationId, 
+                        await HandleAccountingStopAsync(username, sessionId, callingStationId,
                             totalInputBytes, totalOutputBytes, sessionTime, terminateCause);
                         break;
-                    
+
                     case AcctStatusType.InterimUpdate:
                         await HandleAccountingUpdateAsync(username, sessionId, callingStationId,
                             totalInputBytes, totalOutputBytes, sessionTime);
@@ -613,7 +613,7 @@ namespace HotelWifiPortal.Services.Radius
             }
         }
 
-        private async Task<(bool success, Guest? guest, BandwidthProfile? profile, int sessionTimeout, long quotaBytes)> 
+        private async Task<(bool success, Guest? guest, BandwidthProfile? profile, int sessionTimeout, long quotaBytes)>
             AuthenticateUserAsync(string username, string password, string macAddress)
         {
             using var scope = _serviceProvider.CreateScope();
@@ -722,16 +722,54 @@ namespace HotelWifiPortal.Services.Radius
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-            var session = await dbContext.WifiSessions
+            // Get room number from username
+            var roomNumber = username.Split('@')[0];
+
+            // Check for existing active session with same MAC
+            var existingSession = await dbContext.WifiSessions
                 .FirstOrDefaultAsync(s => s.MacAddress == macAddress && s.Status == "Active");
 
-            if (session != null)
+            if (existingSession != null)
             {
-                session.LastActivity = DateTime.UtcNow;
+                // Update existing session with new session ID
+                existingSession.RadiusSessionId = sessionId;
+                existingSession.LastActivity = DateTime.UtcNow;
                 await dbContext.SaveChangesAsync();
+                _logger.LogInformation("Accounting Start: Updated existing session for User={User}, MAC={MAC}", username, macAddress);
+                return;
             }
 
-            _logger.LogInformation("Accounting Start: User={User}, Session={Session}", username, sessionId);
+            // Find guest by room number
+            var guest = await dbContext.Guests
+                .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber && g.Status == "checked-in");
+
+            if (guest != null)
+            {
+                // Create new session
+                var newSession = new WifiSession
+                {
+                    GuestId = guest.Id,
+                    RoomNumber = roomNumber,
+                    MacAddress = macAddress,
+                    RadiusSessionId = sessionId,
+                    SessionStart = DateTime.UtcNow,
+                    Status = "Active",
+                    LastActivity = DateTime.UtcNow,
+                    BytesDownloaded = 0,
+                    BytesUploaded = 0,
+                    BytesUsed = 0
+                };
+
+                dbContext.WifiSessions.Add(newSession);
+                await dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Accounting Start: Created new session for User={User}, MAC={MAC}, SessionId={Session}",
+                    username, macAddress, sessionId);
+            }
+            else
+            {
+                _logger.LogWarning("Accounting Start: Guest not found for room {Room}", roomNumber);
+            }
         }
 
         private async Task HandleAccountingStopAsync(string username, string sessionId, string macAddress,
@@ -760,7 +798,7 @@ namespace HotelWifiPortal.Services.Radius
                     var previousUsage = session.BytesUsed;
                     var newUsage = inputBytes + outputBytes;
                     var delta = newUsage - previousUsage;
-                    
+
                     if (delta > 0)
                     {
                         session.Guest.UsedQuotaBytes += delta;
@@ -860,7 +898,7 @@ namespace HotelWifiPortal.Services.Radius
                     Identifier = (byte)Random.Shared.Next(256),
                     Authenticator = new byte[16]
                 };
-                
+
                 // Generate random authenticator
                 Random.Shared.NextBytes(request.Authenticator);
 
@@ -873,16 +911,16 @@ namespace HotelWifiPortal.Services.Radius
 
                 var packet = request.ToBytes(_sharedSecret);
                 var endpoint = new IPEndPoint(IPAddress.Parse(nasIp), _coaPort);
-                
+
                 await _coaClient!.SendAsync(packet, packet.Length, endpoint);
-                
+
                 // Wait for response (with timeout)
                 var receiveTask = _coaClient.ReceiveAsync();
                 if (await Task.WhenAny(receiveTask, Task.Delay(5000)) == receiveTask)
                 {
                     var result = await receiveTask;
                     var response = RadiusPacket.Parse(result.Buffer);
-                    
+
                     if (response.Code == RadiusCode.DisconnectAck)
                     {
                         _logger.LogInformation("Disconnect successful for MAC {MAC}", macAddress);
@@ -920,7 +958,7 @@ namespace HotelWifiPortal.Services.Radius
                     Identifier = (byte)Random.Shared.Next(256),
                     Authenticator = new byte[16]
                 };
-                
+
                 Random.Shared.NextBytes(request.Authenticator);
 
                 request.AddString(RadiusAttribute.CallingStationId, macAddress);
@@ -928,9 +966,9 @@ namespace HotelWifiPortal.Services.Radius
 
                 var packet = request.ToBytes(_sharedSecret);
                 var endpoint = new IPEndPoint(IPAddress.Parse(nasIp), _coaPort);
-                
+
                 await _coaClient!.SendAsync(packet, packet.Length, endpoint);
-                
+
                 var receiveTask = _coaClient.ReceiveAsync();
                 if (await Task.WhenAny(receiveTask, Task.Delay(5000)) == receiveTask)
                 {
@@ -938,7 +976,7 @@ namespace HotelWifiPortal.Services.Radius
                     var response = RadiusPacket.Parse(result.Buffer);
                     return response.Code == RadiusCode.CoAAck;
                 }
-                
+
                 return false;
             }
             catch (Exception ex)
@@ -946,6 +984,144 @@ namespace HotelWifiPortal.Services.Radius
                 _logger.LogError(ex, "Error sending CoA request");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Send Change of Authorization to update user's session with new quota
+        /// This forces MikroTik to disconnect user so they re-authenticate with new limits
+        /// </summary>
+        public async Task<bool> ForceReauthenticationAsync(string nasIp, string macAddress, string sessionId)
+        {
+            try
+            {
+                _logger.LogInformation("Forcing re-authentication for MAC={MAC} on NAS={NAS}", macAddress, nasIp);
+
+                // Send Disconnect-Request to force re-authentication
+                // User will reconnect and get new quota/speed from fresh authentication
+                return await DisconnectUserAsync(nasIp, macAddress, sessionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error forcing re-authentication");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Update all active sessions for a specific guest with new rate limits
+        /// </summary>
+        public async Task<int> UpdateGuestSessionsAsync(int guestId, int downloadKbps, int uploadKbps)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+            var activeSessions = await dbContext.WifiSessions
+                .Where(s => s.GuestId == guestId && s.Status == "Active")
+                .ToListAsync();
+
+            if (!activeSessions.Any())
+            {
+                _logger.LogInformation("No active sessions found for guest {GuestId}", guestId);
+                return 0;
+            }
+
+            // Get NAS IP from WiFi controller settings
+            var wifiSettings = await dbContext.WifiControllerSettings
+                .FirstOrDefaultAsync(w => w.IsEnabled);
+
+            if (wifiSettings == null || string.IsNullOrEmpty(wifiSettings.IpAddress))
+            {
+                _logger.LogWarning("No WiFi controller configured, cannot send CoA");
+                return 0;
+            }
+
+            var nasIp = wifiSettings.IpAddress;
+            int updated = 0;
+
+            foreach (var session in activeSessions)
+            {
+                try
+                {
+                    var success = await UpdateRateLimitAsync(nasIp, session.MacAddress, downloadKbps, uploadKbps);
+                    if (success)
+                    {
+                        updated++;
+                        _logger.LogInformation("Updated rate limit for session MAC={MAC}: {Down}k/{Up}k",
+                            session.MacAddress, downloadKbps, uploadKbps);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Failed to update rate limit for session MAC={MAC}", session.MacAddress);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error updating session {SessionId}", session.RadiusSessionId);
+                }
+            }
+
+            return updated;
+        }
+
+        /// <summary>
+        /// Disconnect all active sessions for a guest and force re-authentication
+        /// This ensures they get updated quota limits
+        /// </summary>
+        public async Task<int> ForceGuestReauthenticationAsync(int guestId)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+            var activeSessions = await dbContext.WifiSessions
+                .Where(s => s.GuestId == guestId && s.Status == "Active")
+                .ToListAsync();
+
+            if (!activeSessions.Any())
+            {
+                _logger.LogInformation("No active sessions found for guest {GuestId}", guestId);
+                return 0;
+            }
+
+            // Get NAS IP from WiFi controller settings
+            var wifiSettings = await dbContext.WifiControllerSettings
+                .FirstOrDefaultAsync(w => w.IsEnabled);
+
+            if (wifiSettings == null || string.IsNullOrEmpty(wifiSettings.IpAddress))
+            {
+                _logger.LogWarning("No WiFi controller configured, cannot send disconnect");
+                return 0;
+            }
+
+            var nasIp = wifiSettings.IpAddress;
+            int disconnected = 0;
+
+            foreach (var session in activeSessions)
+            {
+                try
+                {
+                    var success = await DisconnectUserAsync(nasIp, session.MacAddress, session.RadiusSessionId ?? "");
+                    if (success)
+                    {
+                        // Mark session as disconnected
+                        session.Status = "Disconnected";
+                        session.SessionEnd = DateTime.UtcNow;
+                        disconnected++;
+
+                        _logger.LogInformation("Disconnected session for re-auth: MAC={MAC}", session.MacAddress);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error disconnecting session {SessionId}", session.RadiusSessionId);
+                }
+            }
+
+            await dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("Forced re-authentication for {Count} sessions of guest {GuestId}",
+                disconnected, guestId);
+
+            return disconnected;
         }
     }
 

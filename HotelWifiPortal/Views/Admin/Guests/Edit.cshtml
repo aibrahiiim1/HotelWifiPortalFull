@@ -1,68 +1,85 @@
-@model HotelWifiPortal.Models.Entities.Guest
+@model HotelWifiPortal.Models.ViewModels.GuestEditViewModel
 @{
     ViewData["Title"] = "Edit Guest";
     Layout = "~/Views/Shared/_AdminLayout.cshtml";
 }
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="bi bi-person-gear me-2"></i>Edit Guest</h2>
+    <h2><i class="bi bi-person-gear me-2"></i>Edit Guest - Room @Model.Guest.RoomNumber</h2>
+    <a asp-action="Details" asp-route-id="@Model.Guest.Id" class="btn btn-outline-secondary">
+        <i class="bi bi-eye me-1"></i>View Details
+    </a>
 </div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-exclamation-triangle me-2"></i>@TempData["Error"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Warning"] != null)
+{
+    <div class="alert alert-warning alert-dismissible fade show">
+        <i class="bi bi-exclamation-circle me-2"></i>@TempData["Warning"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
 
 <div class="row">
     <div class="col-lg-8">
-        <div class="card">
-            <div class="card-body">
-                <form asp-action="Edit" method="post">
-                    <input type="hidden" asp-for="Id" />
-                    
+        <form asp-action="Edit" method="post">
+            <input type="hidden" asp-for="Guest.Id" />
+            
+            <!-- Basic Info Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-person me-2"></i>Guest Information
+                </div>
+                <div class="card-body">
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Room Number <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" asp-for="RoomNumber" required />
+                            <input type="text" class="form-control" asp-for="Guest.RoomNumber" required />
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Reservation Number <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" asp-for="ReservationNumber" required />
+                            <input type="text" class="form-control" asp-for="Guest.ReservationNumber" required />
                         </div>
                     </div>
 
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Guest Name <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" asp-for="GuestName" required />
+                            <input type="text" class="form-control" asp-for="Guest.GuestName" required />
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Email</label>
-                            <input type="email" class="form-control" asp-for="Email" />
+                            <input type="email" class="form-control" asp-for="Guest.Email" />
                         </div>
                     </div>
 
                     <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Check-In Date <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control" asp-for="CheckInDate" required />
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Check-In Date</label>
+                            <input type="date" class="form-control" asp-for="Guest.ArrivalDate" />
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Check-Out Date <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control" asp-for="CheckOutDate" required />
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Check-Out Date</label>
+                            <input type="date" class="form-control" asp-for="Guest.DepartureDate" />
                         </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">VIP Status</label>
-                            <select class="form-select" asp-for="VipStatus">
-                                <option value="">None</option>
-                                <option value="VIP1">VIP 1</option>
-                                <option value="VIP2">VIP 2</option>
-                                <option value="VIP3">VIP 3</option>
-                                <option value="GOLD">Gold</option>
-                                <option value="PLATINUM">Platinum</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label class="form-label">Status</label>
-                            <select class="form-select" asp-for="Status">
+                            <select class="form-select" asp-for="Guest.Status">
                                 <option value="checked-in">Checked In</option>
                                 <option value="checked-out">Checked Out</option>
                                 <option value="reserved">Reserved</option>
@@ -72,26 +89,260 @@
 
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Total Quota (GB)</label>
-                            <input type="number" class="form-control" name="TotalQuotaGB" 
-                                   value="@(Model.TotalQuotaBytes / 1073741824.0)" step="0.1" min="0" />
+                            <label class="form-label">VIP Status</label>
+                            <select class="form-select" asp-for="Guest.VipStatus">
+                                <option value="">None</option>
+                                <option value="VIP1">VIP 1</option>
+                                <option value="VIP2">VIP 2</option>
+                                <option value="VIP3">VIP 3</option>
+                                <option value="GOLD">Gold</option>
+                                <option value="PLATINUM">Platinum</option>
+                            </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Used Quota (GB)</label>
-                            <input type="number" class="form-control" readonly 
-                                   value="@((Model.UsedQuotaBytes / 1073741824.0).ToString("N2"))" />
-                            <small class="text-muted">Read-only</small>
+                            <label class="form-label">Local Password</label>
+                            <input type="text" class="form-control" asp-for="Guest.LocalPassword" placeholder="Leave empty to use Reservation Number" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WiFi Settings Card -->
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <i class="bi bi-wifi me-2"></i>WiFi Quota & Speed Settings
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">
+                                <i class="bi bi-database me-1"></i>Assign Quota Package
+                            </label>
+                            <select class="form-select" asp-for="SelectedFreePackageId" asp-items="Model.FreePackages">
+                            </select>
+                            <small class="text-muted">Select a pre-defined package or leave empty for custom quota</small>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">
+                                <i class="bi bi-speedometer2 me-1"></i>Assign Bandwidth Profile
+                            </label>
+                            <select class="form-select" asp-for="SelectedBandwidthProfileId" asp-items="Model.BandwidthProfiles">
+                            </select>
+                            <small class="text-muted">Select a speed profile or leave empty for default</small>
                         </div>
                     </div>
 
-                    <div class="d-flex justify-content-end gap-2">
-                        <a asp-action="Index" class="btn btn-outline-secondary">Cancel</a>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-check-lg me-2"></i>Save Changes
-                        </button>
+                    <hr />
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Total Quota (GB)</label>
+                            <input type="number" class="form-control" asp-for="TotalQuotaGB" step="0.1" min="0" />
+                            <small class="text-muted">Manual override (ignored if package selected)</small>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Used Quota (GB)</label>
+                            <input type="number" class="form-control" readonly 
+                                   value="@((Model.Guest.UsedQuotaBytes / 1073741824.0).ToString("N2"))" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Remaining (GB)</label>
+                            <input type="number" class="form-control" readonly 
+                                   value="@(((Model.Guest.TotalQuotaBytes - Model.Guest.UsedQuotaBytes) / 1073741824.0).ToString("N2"))" />
+                        </div>
                     </div>
+
+                    <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" asp-for="ResetUsage" id="resetUsage" />
+                        <label class="form-check-label text-danger" for="resetUsage">
+                            <i class="bi bi-arrow-counterclockwise me-1"></i>Reset Usage to Zero
+                        </label>
+                    </div>
+                    
+                    <hr class="my-3" />
+                    
+                    <!-- WiFi Password Section -->
+                    <div class="row">
+                        <div class="col-12">
+                            <h6><i class="bi bi-key me-2"></i>WiFi Password</h6>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Current WiFi Password</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" asp-for="Guest.WifiPassword" 
+                                       placeholder="@(Model.Guest.PasswordResetRequired ? "(Not set yet)" : "")" />
+                                <button class="btn btn-outline-secondary" type="button" onclick="generatePassword()">
+                                    <i class="bi bi-shuffle"></i>
+                                </button>
+                            </div>
+                            <small class="text-muted">5+ digits only. Leave empty to require guest to set on login.</small>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Password Status</label>
+                            <div class="mt-2">
+                                @if (string.IsNullOrEmpty(Model.Guest.WifiPassword))
+                                {
+                                    <span class="badge bg-warning text-dark">
+                                        <i class="bi bi-exclamation-triangle me-1"></i>Not Set - Guest will be prompted
+                                    </span>
+                                }
+                                else if (Model.Guest.PasswordResetRequired)
+                                {
+                                    <span class="badge bg-info">
+                                        <i class="bi bi-arrow-repeat me-1"></i>Reset Required on Next Login
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-success">
+                                        <i class="bi bi-check-circle me-1"></i>Set on @(Model.Guest.PasswordSetAt?.ToString("MMM dd, yyyy HH:mm") ?? "Unknown")
+                                    </span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" asp-for="Guest.PasswordResetRequired" id="passwordReset" />
+                        <label class="form-check-label text-warning" for="passwordReset">
+                            <i class="bi bi-arrow-repeat me-1"></i>Require Password Reset on Next Login
+                        </label>
+                        <small class="form-text text-muted d-block">
+                            When checked, guest will be asked to create a new WiFi password on their next login.
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between">
+                <a asp-action="Index" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back to List
+                </a>
+                <button type="submit" class="btn btn-primary btn-lg">
+                    <i class="bi bi-check-lg me-2"></i>Save Changes
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="col-lg-4">
+        <!-- Apply to Session Card -->
+        <div class="card mb-3 border-warning">
+            <div class="card-header bg-warning text-dark">
+                <i class="bi bi-lightning-charge me-2"></i>Apply Changes Immediately
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    After saving changes, click this button to disconnect the guest so they reconnect with the new quota and speed settings.
+                </p>
+                <form asp-action="ApplyToActiveSession" method="post">
+                    <input type="hidden" name="id" value="@Model.Guest.Id" />
+                    <button type="submit" class="btn btn-warning w-100" 
+                            onclick="return confirm('This will disconnect the guest from WiFi. They will automatically reconnect with the new settings. Continue?')">
+                        <i class="bi bi-arrow-clockwise me-2"></i>Apply to Active Sessions
+                    </button>
                 </form>
+            </div>
+        </div>
+        
+        <!-- RADIUS Management Card -->
+        <div class="card mb-3 border-danger">
+            <div class="card-header bg-danger text-white">
+                <i class="bi bi-server me-2"></i>RADIUS Management
+            </div>
+            <div class="card-body">
+                <form asp-action="ResetGuestUsage" method="post" class="mb-2">
+                    <input type="hidden" name="id" value="@Model.Guest.Id" />
+                    <button type="submit" class="btn btn-outline-danger w-100" 
+                            onclick="return confirm('Reset all usage data to zero for this guest?')">
+                        <i class="bi bi-arrow-counterclockwise me-2"></i>Reset Usage to Zero
+                    </button>
+                </form>
+                <form asp-action="DeleteFromRadius" method="post">
+                    <input type="hidden" name="id" value="@Model.Guest.Id" />
+                    <button type="submit" class="btn btn-danger w-100" 
+                            onclick="return confirm('Delete this guest from FreeRADIUS? They will need to be re-synced to connect again.')">
+                        <i class="bi bi-trash me-2"></i>Delete from RADIUS
+                    </button>
+                </form>
+                <small class="text-muted d-block mt-2">
+                    <i class="bi bi-info-circle me-1"></i>Use these to troubleshoot connectivity issues
+                </small>
+            </div>
+        </div>
+
+        <!-- Current Quota Info -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-pie-chart me-2"></i>Current Quota Status
+            </div>
+            <div class="card-body">
+                @{
+                    var usedPercent = Model.Guest.TotalQuotaBytes > 0 
+                        ? (int)((Model.Guest.UsedQuotaBytes * 100) / Model.Guest.TotalQuotaBytes) 
+                        : 0;
+                    var barColor = usedPercent > 90 ? "bg-danger" : usedPercent > 70 ? "bg-warning" : "bg-success";
+                }
+                <div class="progress mb-3" style="height: 25px;">
+                    <div class="progress-bar @barColor" style="width: @usedPercent%">
+                        @usedPercent%
+                    </div>
+                </div>
+                
+                <table class="table table-sm mb-0">
+                    <tr>
+                        <td><i class="bi bi-gift text-success me-1"></i>Free Quota:</td>
+                        <td class="text-end"><strong>@((Model.Guest.FreeQuotaBytes / 1073741824.0).ToString("N2")) GB</strong></td>
+                    </tr>
+                    <tr>
+                        <td><i class="bi bi-credit-card text-primary me-1"></i>Paid Quota:</td>
+                        <td class="text-end"><strong>@((Model.Guest.PaidQuotaBytes / 1073741824.0).ToString("N2")) GB</strong></td>
+                    </tr>
+                    <tr class="table-light">
+                        <td><i class="bi bi-database me-1"></i>Total:</td>
+                        <td class="text-end"><strong>@((Model.Guest.TotalQuotaBytes / 1073741824.0).ToString("N2")) GB</strong></td>
+                    </tr>
+                    <tr>
+                        <td><i class="bi bi-cloud-download text-danger me-1"></i>Used:</td>
+                        <td class="text-end"><strong>@((Model.Guest.UsedQuotaBytes / 1073741824.0).ToString("N2")) GB</strong></td>
+                    </tr>
+                    <tr class="table-success">
+                        <td><i class="bi bi-check-circle me-1"></i>Remaining:</td>
+                        <td class="text-end"><strong>@(((Model.Guest.TotalQuotaBytes - Model.Guest.UsedQuotaBytes) / 1073741824.0).ToString("N2")) GB</strong></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-lightning me-2"></i>Quick Actions
+            </div>
+            <div class="list-group list-group-flush">
+                <a asp-action="Details" asp-route-id="@Model.Guest.Id" class="list-group-item list-group-item-action">
+                    <i class="bi bi-eye me-2"></i>View Full Details
+                </a>
+                <a asp-controller="Sessions" asp-action="Index" asp-route-room="@Model.Guest.RoomNumber" class="list-group-item list-group-item-action">
+                    <i class="bi bi-wifi me-2"></i>View Sessions
+                </a>
+                <a asp-controller="Packages" asp-action="Transactions" asp-route-room="@Model.Guest.RoomNumber" class="list-group-item list-group-item-action">
+                    <i class="bi bi-credit-card me-2"></i>View Transactions
+                </a>
             </div>
         </div>
     </div>
 </div>
+
+@section Scripts {
+<script>
+    function generatePassword() {
+        // Generate a random 6-digit numeric password
+        var password = '';
+        for (var i = 0; i < 6; i++) {
+            password += Math.floor(Math.random() * 10);
+        }
+        document.getElementById('Guest_WifiPassword').value = password;
+    }
+</script>
+}

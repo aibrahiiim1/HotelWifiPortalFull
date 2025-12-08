@@ -68,7 +68,96 @@ namespace HotelWifiPortal.Controllers.Admin
         public async Task<IActionResult> Active()
         {
             var sessions = await _wifiService.GetActiveSessionsAsync();
+
+            // Get guest data for quota display
+            var guestIds = sessions.Select(s => s.GuestId).Distinct().ToList();
+            var guests = await _dbContext.Guests
+                .Where(g => guestIds.Contains(g.Id))
+                .ToDictionaryAsync(g => g.Id);
+
+            ViewBag.Guests = guests;
+
             return View(sessions);
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin,Manager")]
+        public async Task<IActionResult> ForceExpireQuota(int id)
+        {
+            var session = await _dbContext.WifiSessions
+                .Include(s => s.Guest)
+                .FirstOrDefaultAsync(s => s.Id == id);
+
+            if (session == null)
+            {
+                TempData["Error"] = "Session not found.";
+                return RedirectToAction(nameof(Active));
+            }
+
+            var guest = session.Guest;
+            if (guest == null)
+            {
+                guest = await _dbContext.Guests.FirstOrDefaultAsync(g => g.RoomNumber == session.RoomNumber);
+            }
+
+            if (guest == null)
+            {
+                TempData["Error"] = "Guest not found.";
+                return RedirectToAction(nameof(Active));
+            }
+
+            try
+            {
+                // Set usage to exceed quota (total quota + 1 MB to ensure exceeded)
+                var oldUsage = guest.UsedQuotaBytes;
+                guest.UsedQuotaBytes = guest.TotalQuotaBytes + 1048576; // Exceed by 1 MB
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Force expired quota for Room {Room}: {OldUsage}MB -> {NewUsage}MB (Total quota: {Quota}MB)",
+                    guest.RoomNumber,
+                    oldUsage / 1048576.0,
+                    guest.UsedQuotaBytes / 1048576.0,
+                    guest.TotalQuotaBytes / 1048576.0);
+
+                // Also update FreeRADIUS radacct if configured
+                try
+                {
+                    var settings = await _dbContext.SystemSettings.ToListAsync();
+                    var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                    var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                    if (!string.IsNullOrEmpty(connStr))
+                    {
+                        using var connection = new MySqlConnection(connStr);
+                        await connection.OpenAsync();
+
+                        // Update accounting to show exceeded usage
+                        using var cmd = new MySqlConnection(connStr).CreateCommand();
+                        cmd.Connection = connection;
+                        cmd.CommandText = $"UPDATE {prefix}acct SET acctinputoctets = @bytes WHERE username = @username AND acctstoptime IS NULL";
+                        cmd.Parameters.AddWithValue("@bytes", guest.UsedQuotaBytes);
+                        cmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not update FreeRADIUS accounting for forced quota expiry");
+                }
+
+                // Disconnect the session
+                await _wifiService.DisconnectSessionAsync(id);
+
+                TempData["Success"] = $"Quota force expired for Room {guest.RoomNumber}. Session disconnected. Guest will see paywall on reconnect.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error force expiring quota for session {SessionId}", id);
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(Active));
         }
 
         public async Task<IActionResult> Details(int id)
@@ -252,6 +341,92 @@ namespace HotelWifiPortal.Controllers.Admin
             }
 
             return RedirectToAction(nameof(Active));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin")]
+        public async Task<IActionResult> CleanupDuplicateSessions()
+        {
+            try
+            {
+                // Find duplicate sessions for same guest+MAC combination
+                var duplicateGroups = await _dbContext.WifiSessions
+                    .Where(s => s.Status == "Active" || s.Status == "QuotaExceeded")
+                    .GroupBy(s => new { s.GuestId, s.MacAddress })
+                    .Where(g => g.Count() > 1)
+                    .ToListAsync();
+
+                int removed = 0;
+                foreach (var group in duplicateGroups)
+                {
+                    // Keep the most recent session, close others
+                    var sessions = group.OrderByDescending(s => s.SessionStart).ToList();
+                    var keepSession = sessions.First();
+
+                    // Aggregate usage to the kept session
+                    long totalBytes = sessions.Sum(s => s.BytesUsed);
+                    keepSession.BytesUsed = totalBytes;
+                    keepSession.BytesDownloaded = sessions.Sum(s => s.BytesDownloaded);
+                    keepSession.BytesUploaded = sessions.Sum(s => s.BytesUploaded);
+
+                    // Close duplicate sessions
+                    foreach (var dup in sessions.Skip(1))
+                    {
+                        dup.Status = "Merged";
+                        dup.SessionEnd = DateTime.UtcNow;
+                        removed++;
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync();
+
+                if (removed > 0)
+                {
+                    TempData["Success"] = $"Cleaned up {removed} duplicate sessions.";
+                    _logger.LogInformation("Cleaned up {Count} duplicate sessions", removed);
+                }
+                else
+                {
+                    TempData["Success"] = "No duplicate sessions found.";
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cleaning up duplicate sessions");
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin")]
+        public async Task<IActionResult> CloseQuotaExceededSessions()
+        {
+            try
+            {
+                var exceededSessions = await _dbContext.WifiSessions
+                    .Where(s => s.Status == "QuotaExceeded")
+                    .ToListAsync();
+
+                foreach (var session in exceededSessions)
+                {
+                    session.Status = "Disconnected";
+                    session.SessionEnd = DateTime.UtcNow;
+                }
+
+                await _dbContext.SaveChangesAsync();
+                TempData["Success"] = $"Closed {exceededSessions.Count} quota exceeded sessions.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error closing quota exceeded sessions");
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(Index));
         }
     }
 }

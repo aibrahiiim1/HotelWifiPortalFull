@@ -66,17 +66,26 @@
 
                     <h6 class="mb-3">Posting Settings</h6>
                     <div class="row mb-3">
-                        <div class="col-md-4">
+                        <div class="col-md-6">
                             <div class="form-check form-switch">
                                 <input asp-for="AutoPostCharges" class="form-check-input" type="checkbox" />
                                 <label asp-for="AutoPostCharges" class="form-check-label">Auto-Post Charges to PMS</label>
                             </div>
                         </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input asp-for="PostByReservationNumber" class="form-check-input" type="checkbox" />
+                                <label asp-for="PostByReservationNumber" class="form-check-label">Post by Reservation Number</label>
+                            </div>
+                            <small class="text-muted">If checked, uses G# (reservation) as primary identifier instead of RN (room)</small>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
                         <div class="col-md-4">
                             <label asp-for="PostingCurrency" class="form-label">Currency</label>
                             <input asp-for="PostingCurrency" class="form-control" maxlength="3" />
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-8">
                             <label asp-for="PostingDescription" class="form-label">Posting Description</label>
                             <input asp-for="PostingDescription" class="form-control" />
                         </div>

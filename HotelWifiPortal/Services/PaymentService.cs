@@ -72,7 +72,8 @@ namespace HotelWifiPortal.Services
                 
                 if (pmsSettings?.IsEnabled == true && pmsSettings.AutoPostCharges)
                 {
-                    _logger.LogInformation("PMS auto-posting enabled. Attempting to post charge...");
+                    _logger.LogInformation("PMS auto-posting enabled. Posting by {Mode}...", 
+                        pmsSettings.PostByReservationNumber ? "Reservation Number" : "Room Number");
                     
                     if (_fiasServer.IsConnected)
                     {
@@ -83,16 +84,20 @@ namespace HotelWifiPortal.Services
                                 guest.RoomNumber,
                                 guest.ReservationNumber,
                                 package.Price,
-                                description);
+                                description,
+                                pmsSettings.PostByReservationNumber);
 
                             transaction.PostedToPMS = true;
                             transaction.PostedToPMSAt = DateTime.UtcNow;
                             transaction.Status = "PostedToPMS";
                             transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
-                            transaction.PMSResponse = "Success";
+                            transaction.PMSResponse = pmsSettings.PostByReservationNumber 
+                                ? $"Success (by Reservation# {guest.ReservationNumber})" 
+                                : $"Success (by Room {guest.RoomNumber})";
 
-                            _logger.LogInformation("✓ Charge posted to PMS successfully: Room {Room}, Amount {Currency} {Amount}",
-                                guest.RoomNumber, package.Currency, package.Price);
+                            _logger.LogInformation("✓ Charge posted to PMS successfully: {Identifier}, Amount {Currency} {Amount}",
+                                pmsSettings.PostByReservationNumber ? $"Reservation# {guest.ReservationNumber}" : $"Room {guest.RoomNumber}",
+                                package.Currency, package.Price);
                         }
                         catch (Exception pmsEx)
                         {

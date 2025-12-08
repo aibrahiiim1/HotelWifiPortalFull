@@ -323,7 +323,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault)
                     .ToListAsync();
-
+                
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -405,7 +405,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault && p.Id != id)
                     .ToListAsync();
-
+                
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -531,7 +531,7 @@ namespace HotelWifiPortal.Controllers.Admin
 
                 // Get FIAS server service
                 var fiasServer = HttpContext.RequestServices.GetRequiredService<HotelWifiPortal.Services.PMS.FiasSocketServer>();
-
+                
                 if (!fiasServer.IsConnected)
                 {
                     TempData["Error"] = "Not connected to PMS. Please check FIAS connection.";
@@ -544,19 +544,27 @@ namespace HotelWifiPortal.Controllers.Admin
                     transaction.RoomNumber,
                     transaction.ReservationNumber,
                     transaction.Amount,
-                    description);
+                    description,
+                    pmsSettings.PostByReservationNumber);
 
                 // Update transaction
                 transaction.PostedToPMS = true;
                 transaction.PostedToPMSAt = DateTime.UtcNow;
                 transaction.Status = "PostedToPMS";
                 transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
+                transaction.PMSResponse = pmsSettings.PostByReservationNumber 
+                    ? $"Success (by Reservation# {transaction.ReservationNumber})" 
+                    : $"Success (by Room {transaction.RoomNumber})";
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation("Manually posted transaction {Id} to PMS: Room {Room}, Amount {Amount}",
-                    transaction.Id, transaction.RoomNumber, transaction.Amount);
+                var identifier = pmsSettings.PostByReservationNumber 
+                    ? $"Reservation# {transaction.ReservationNumber}" 
+                    : $"Room {transaction.RoomNumber}";
+                    
+                _logger.LogInformation("Manually posted transaction {Id} to PMS: {Identifier}, Amount {Amount}",
+                    transaction.Id, identifier, transaction.Amount);
 
-                TempData["Success"] = $"Successfully posted ${transaction.Amount:N2} to Room {transaction.RoomNumber} PMS folio.";
+                TempData["Success"] = $"Successfully posted ${transaction.Amount:N2} to {identifier} PMS folio.";
             }
             catch (Exception ex)
             {
@@ -606,12 +614,16 @@ namespace HotelWifiPortal.Controllers.Admin
                         transaction.RoomNumber,
                         transaction.ReservationNumber,
                         transaction.Amount,
-                        $"WiFi: {transaction.PackageName}");
+                        $"WiFi: {transaction.PackageName}",
+                        pmsSettings.PostByReservationNumber);
 
                     transaction.PostedToPMS = true;
                     transaction.PostedToPMSAt = DateTime.UtcNow;
                     transaction.Status = "PostedToPMS";
                     transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
+                    transaction.PMSResponse = pmsSettings.PostByReservationNumber 
+                        ? $"Success (by Reservation# {transaction.ReservationNumber})" 
+                        : $"Success (by Room {transaction.RoomNumber})";
                     posted++;
                 }
                 catch (Exception ex)

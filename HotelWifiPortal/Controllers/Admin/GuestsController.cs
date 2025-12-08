@@ -3,6 +3,7 @@ using HotelWifiPortal.Models.Entities;
 using HotelWifiPortal.Models.ViewModels;
 using HotelWifiPortal.Services;
 using HotelWifiPortal.Services.PMS;
+using HotelWifiPortal.Services.Radius;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,17 +17,20 @@ namespace HotelWifiPortal.Controllers.Admin
         private readonly ApplicationDbContext _dbContext;
         private readonly QuotaService _quotaService;
         private readonly FiasSocketServer _fiasServer;
+        private readonly RadiusServer _radiusServer;
         private readonly ILogger<GuestsController> _logger;
 
         public GuestsController(
             ApplicationDbContext dbContext,
             QuotaService quotaService,
             FiasSocketServer fiasServer,
+            RadiusServer radiusServer,
             ILogger<GuestsController> logger)
         {
             _dbContext = dbContext;
             _quotaService = quotaService;
             _fiasServer = fiasServer;
+            _radiusServer = radiusServer;
             _logger = logger;
         }
 
@@ -141,15 +145,48 @@ namespace HotelWifiPortal.Controllers.Admin
                 return NotFound();
             }
 
-            return View(guest);
+            // Get free packages for dropdown
+            var freePackages = await _dbContext.BandwidthPackages
+                .Where(p => p.IsActive)
+                .OrderBy(p => p.QuotaGB)
+                .Select(p => new Microsoft.AspNetCore.Mvc.Rendering.SelectListItem
+                {
+                    Value = p.Id.ToString(),
+                    Text = $"{p.Name} ({p.QuotaGB}GB, {(p.SpeedLimitKbps ?? 0) / 1000}Mbps)"
+                })
+                .ToListAsync();
+            freePackages.Insert(0, new Microsoft.AspNetCore.Mvc.Rendering.SelectListItem { Value = "", Text = "-- Custom Quota --" });
+
+            // Get bandwidth profiles for dropdown
+            var bandwidthProfiles = await _dbContext.BandwidthProfiles
+                .Where(p => p.IsActive)
+                .OrderBy(p => p.Name)
+                .Select(p => new Microsoft.AspNetCore.Mvc.Rendering.SelectListItem
+                {
+                    Value = p.Id.ToString(),
+                    Text = $"{p.Name} ({p.DownloadSpeedKbps / 1000}Mbps down / {p.UploadSpeedKbps / 1000}Mbps up)"
+                })
+                .ToListAsync();
+            bandwidthProfiles.Insert(0, new Microsoft.AspNetCore.Mvc.Rendering.SelectListItem { Value = "", Text = "-- Default Profile --" });
+
+            var model = new GuestEditViewModel
+            {
+                Guest = guest,
+                FreePackages = freePackages,
+                BandwidthProfiles = bandwidthProfiles,
+                SelectedBandwidthProfileId = guest.BandwidthProfileId,
+                TotalQuotaGB = guest.TotalQuotaBytes / 1073741824.0
+            };
+
+            return View(model);
         }
 
         [HttpPost]
         [ValidateAntiForgeryToken]
         [Authorize(Roles = "Admin,SuperAdmin,Manager")]
-        public async Task<IActionResult> Edit(int id, Guest guest)
+        public async Task<IActionResult> Edit(int id, GuestEditViewModel model)
         {
-            if (id != guest.Id)
+            if (id != model.Guest.Id)
             {
                 return NotFound();
             }
@@ -160,30 +197,248 @@ namespace HotelWifiPortal.Controllers.Admin
                 return NotFound();
             }
 
-            existingGuest.RoomNumber = guest.RoomNumber;
-            existingGuest.GuestName = guest.GuestName;
-            existingGuest.Language = guest.Language;
-            existingGuest.ArrivalDate = guest.ArrivalDate;
-            existingGuest.DepartureDate = guest.DepartureDate;
-            existingGuest.Status = guest.Status;
-            existingGuest.VipStatus = guest.VipStatus;
-            existingGuest.Email = guest.Email;
-            existingGuest.Phone = guest.Phone;
-            existingGuest.Notes = guest.Notes;
-            existingGuest.LocalPassword = guest.LocalPassword;
+            // Update basic info
+            existingGuest.RoomNumber = model.Guest.RoomNumber;
+            existingGuest.ReservationNumber = model.Guest.ReservationNumber;
+            existingGuest.GuestName = model.Guest.GuestName;
+            existingGuest.Language = model.Guest.Language;
+            existingGuest.ArrivalDate = model.Guest.ArrivalDate;
+            existingGuest.DepartureDate = model.Guest.DepartureDate;
+            existingGuest.Status = model.Guest.Status;
+            existingGuest.VipStatus = model.Guest.VipStatus;
+            existingGuest.Email = model.Guest.Email;
+            existingGuest.Phone = model.Guest.Phone;
+            existingGuest.Notes = model.Guest.Notes;
+            existingGuest.LocalPassword = model.Guest.LocalPassword;
             existingGuest.UpdatedAt = DateTime.UtcNow;
 
-            // Recalculate quota if stay length changed
-            var newQuota = await _quotaService.CalculateFreeQuotaAsync(existingGuest.StayLength);
-            if (existingGuest.FreeQuotaBytes != newQuota)
+            // Handle quota assignment
+            if (model.SelectedFreePackageId.HasValue && model.SelectedFreePackageId.Value > 0)
             {
-                existingGuest.FreeQuotaBytes = newQuota;
+                // Apply free package quota
+                var package = await _dbContext.BandwidthPackages.FindAsync(model.SelectedFreePackageId.Value);
+                if (package != null)
+                {
+                    existingGuest.FreeQuotaBytes = (long)(package.QuotaGB * 1073741824);
+                    _logger.LogInformation("Applied free package {Package} to guest {Room}: {Quota}GB",
+                        package.Name, existingGuest.RoomNumber, package.QuotaGB);
+                }
+            }
+            else if (model.TotalQuotaGB > 0)
+            {
+                // Manual quota override
+                existingGuest.FreeQuotaBytes = (long)(model.TotalQuotaGB * 1073741824) - existingGuest.PaidQuotaBytes;
+                if (existingGuest.FreeQuotaBytes < 0) existingGuest.FreeQuotaBytes = 0;
+            }
+
+            // Handle bandwidth profile assignment
+            if (model.SelectedBandwidthProfileId.HasValue && model.SelectedBandwidthProfileId.Value > 0)
+            {
+                existingGuest.BandwidthProfileId = model.SelectedBandwidthProfileId.Value;
+                var profile = await _dbContext.BandwidthProfiles.FindAsync(model.SelectedBandwidthProfileId.Value);
+                _logger.LogInformation("Applied bandwidth profile {Profile} to guest {Room}",
+                    profile?.Name, existingGuest.RoomNumber);
+            }
+            else
+            {
+                existingGuest.BandwidthProfileId = null; // Use default
+            }
+
+            // Reset usage if requested
+            if (model.ResetUsage)
+            {
+                existingGuest.UsedQuotaBytes = 0;
+                _logger.LogInformation("Reset usage for guest {Room}", existingGuest.RoomNumber);
+            }
+
+            // Handle WiFi password updates
+            var oldWifiPassword = existingGuest.WifiPassword;
+            existingGuest.WifiPassword = model.Guest.WifiPassword;
+            existingGuest.PasswordResetRequired = model.Guest.PasswordResetRequired;
+
+            // If WiFi password was changed, update the timestamp
+            if (oldWifiPassword != existingGuest.WifiPassword && !string.IsNullOrEmpty(existingGuest.WifiPassword))
+            {
+                existingGuest.PasswordSetAt = DateTime.UtcNow;
+                _logger.LogInformation("WiFi password updated for guest {Room}", existingGuest.RoomNumber);
             }
 
             await _dbContext.SaveChangesAsync();
 
+            // If WiFi password was set/changed, update FreeRADIUS
+            if (!string.IsNullOrEmpty(existingGuest.WifiPassword) && oldWifiPassword != existingGuest.WifiPassword)
+            {
+                try
+                {
+                    // Update FreeRADIUS with new password
+                    var freeRadiusService = HttpContext.RequestServices.GetService<Services.Radius.FreeRadiusService>();
+                    if (freeRadiusService != null)
+                    {
+                        await freeRadiusService.CreateOrUpdateUserAsync(existingGuest);
+                        _logger.LogInformation("FreeRADIUS updated with new password for {Room}", existingGuest.RoomNumber);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not update FreeRADIUS password for {Room}", existingGuest.RoomNumber);
+                }
+            }
+
             TempData["Success"] = "Guest updated successfully.";
-            return RedirectToAction(nameof(Details), new { id });
+            return RedirectToAction(nameof(Edit), new { id });
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin,Manager")]
+        public async Task<IActionResult> ApplyToActiveSession(int id)
+        {
+            var guest = await _dbContext.Guests.FindAsync(id);
+            if (guest == null)
+            {
+                TempData["Error"] = "Guest not found.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            try
+            {
+                var disconnected = await _radiusServer.ForceGuestReauthenticationAsync(id);
+
+                if (disconnected > 0)
+                {
+                    _logger.LogInformation("Force re-authentication for guest {GuestId}: {Count} sessions disconnected",
+                        id, disconnected);
+                    TempData["Success"] = $"Disconnected {disconnected} active session(s). Guest will reconnect with updated settings.";
+                }
+                else
+                {
+                    TempData["Warning"] = "No active sessions found for this guest.";
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error forcing re-authentication for guest {GuestId}", id);
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(Edit), new { id });
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin,Manager")]
+        public async Task<IActionResult> ResetGuestUsage(int id)
+        {
+            var guest = await _dbContext.Guests.FindAsync(id);
+            if (guest == null)
+            {
+                TempData["Error"] = "Guest not found.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            try
+            {
+                var oldUsage = guest.UsedQuotaBytes;
+                guest.UsedQuotaBytes = 0;
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Reset usage for guest {Room}: {OldUsage}MB -> 0",
+                    guest.RoomNumber, oldUsage / 1048576.0);
+
+                // Also try to reset in FreeRADIUS radacct
+                try
+                {
+                    var settings = await _dbContext.SystemSettings.ToListAsync();
+                    var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                    var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                    if (!string.IsNullOrEmpty(connStr))
+                    {
+                        using var connection = new MySqlConnector.MySqlConnection(connStr);
+                        await connection.OpenAsync();
+
+                        using var cmd = new MySqlConnector.MySqlCommand(
+                            $"UPDATE {prefix}acct SET acctinputoctets = 0, acctoutputoctets = 0 WHERE username = @username",
+                            connection);
+                        cmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not reset FreeRADIUS accounting for {Room}", guest.RoomNumber);
+                }
+
+                TempData["Success"] = $"Usage reset to zero for Room {guest.RoomNumber}. Previous usage: {oldUsage / 1048576.0:N2} MB";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resetting usage for guest {GuestId}", id);
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(Edit), new { id });
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin,Manager")]
+        public async Task<IActionResult> DeleteFromRadius(int id)
+        {
+            var guest = await _dbContext.Guests.FindAsync(id);
+            if (guest == null)
+            {
+                TempData["Error"] = "Guest not found.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            try
+            {
+                var settings = await _dbContext.SystemSettings.ToListAsync();
+                var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                if (string.IsNullOrEmpty(connStr))
+                {
+                    TempData["Warning"] = "FreeRADIUS is not configured.";
+                    return RedirectToAction(nameof(Edit), new { id });
+                }
+
+                using var connection = new MySqlConnector.MySqlConnection(connStr);
+                await connection.OpenAsync();
+
+                int totalDeleted = 0;
+
+                // Delete from radcheck
+                using var cmd1 = new MySqlConnector.MySqlCommand(
+                    $"DELETE FROM {prefix}check WHERE username = @username", connection);
+                cmd1.Parameters.AddWithValue("@username", guest.RoomNumber);
+                totalDeleted += await cmd1.ExecuteNonQueryAsync();
+
+                // Delete from radreply
+                using var cmd2 = new MySqlConnector.MySqlCommand(
+                    $"DELETE FROM {prefix}reply WHERE username = @username", connection);
+                cmd2.Parameters.AddWithValue("@username", guest.RoomNumber);
+                totalDeleted += await cmd2.ExecuteNonQueryAsync();
+
+                // Delete from radusergroup
+                using var cmd3 = new MySqlConnector.MySqlCommand(
+                    $"DELETE FROM {prefix}usergroup WHERE username = @username", connection);
+                cmd3.Parameters.AddWithValue("@username", guest.RoomNumber);
+                totalDeleted += await cmd3.ExecuteNonQueryAsync();
+
+                _logger.LogInformation("Deleted guest {Room} from FreeRADIUS: {Count} entries",
+                    guest.RoomNumber, totalDeleted);
+
+                TempData["Success"] = $"Deleted Room {guest.RoomNumber} from FreeRADIUS ({totalDeleted} entries). Use 'Sync All Guests' to re-add.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting guest {GuestId} from FreeRADIUS", id);
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(Edit), new { id });
         }
 
         [HttpPost]

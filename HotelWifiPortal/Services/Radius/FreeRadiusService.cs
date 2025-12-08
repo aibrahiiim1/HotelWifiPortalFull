@@ -114,9 +114,21 @@ namespace HotelWifiPortal.Services.Radius
             try
             {
                 var username = guest.RoomNumber;
-                var userPassword = password ?? guest.LocalPassword ?? guest.ReservationNumber;
+                // Password priority: 
+                // 1. Explicit password parameter
+                // 2. WifiPassword (if guest has set their own password)
+                // 3. LocalPassword (standalone mode)
+                // 4. ReservationNumber (fallback for first login)
+                var userPassword = password
+                    ?? guest.WifiPassword
+                    ?? guest.LocalPassword
+                    ?? guest.ReservationNumber;
 
-                _logger.LogInformation("Creating/updating FreeRADIUS user: {Username}", username);
+                _logger.LogInformation("Creating/updating FreeRADIUS user: {Username}, PasswordSource: {Source}",
+                    username,
+                    password != null ? "explicit" :
+                    !string.IsNullOrEmpty(guest.WifiPassword) ? "WifiPassword" :
+                    !string.IsNullOrEmpty(guest.LocalPassword) ? "LocalPassword" : "ReservationNumber");
 
                 using var connection = new MySqlConnection(_connectionString);
                 await connection.OpenAsync();
@@ -857,16 +869,33 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
 
         public async Task<bool> InitializeDatabaseAsync()
         {
-            if (!_isEnabled || string.IsNullOrEmpty(_connectionString)) return false;
+            // Always load config first
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled)
+            {
+                _logger.LogWarning("InitializeDatabaseAsync: FreeRADIUS is not enabled");
+                throw new InvalidOperationException("FreeRADIUS is not enabled. Please enable it in settings first.");
+            }
+
+            if (string.IsNullOrEmpty(_connectionString))
+            {
+                _logger.LogWarning("InitializeDatabaseAsync: Connection string is empty");
+                throw new InvalidOperationException("Connection string is empty. Please configure database connection first.");
+            }
 
             try
             {
+                _logger.LogInformation("Connecting to MySQL with connection string length: {Length}", _connectionString.Length);
+
                 using var connection = new MySqlConnection(_connectionString);
                 await connection.OpenAsync();
+                _logger.LogInformation("Connected to MySQL successfully");
 
                 var schema = GetDatabaseSchema();
                 var statements = schema.Split(new[] { ";\n", ";\r\n" }, StringSplitOptions.RemoveEmptyEntries);
 
+                int successCount = 0;
                 foreach (var statement in statements)
                 {
                     var sql = statement.Trim();
@@ -876,6 +905,7 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
                     {
                         using var cmd = new MySqlCommand(sql, connection);
                         await cmd.ExecuteNonQueryAsync();
+                        successCount++;
                     }
                     catch (Exception ex)
                     {
@@ -883,13 +913,96 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
                     }
                 }
 
-                _logger.LogInformation("FreeRADIUS database schema initialized");
+                _logger.LogInformation("FreeRADIUS database schema initialized - {Count} statements executed", successCount);
                 return true;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error initializing FreeRADIUS database");
+                throw; // Re-throw to show actual error to user
+            }
+        }
+
+        /// <summary>
+        /// Delete a specific user from FreeRADIUS
+        /// </summary>
+        public async Task<bool> DeleteUserAsync(string username)
+        {
+            await EnsureConfigLoadedAsync();
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString)) return false;
+
+            try
+            {
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Delete from radcheck
+                using var cmd1 = new MySqlCommand($"DELETE FROM `{_tablePrefix}check` WHERE username = @username", connection);
+                cmd1.Parameters.AddWithValue("@username", username);
+                var deleted1 = await cmd1.ExecuteNonQueryAsync();
+
+                // Delete from radreply
+                using var cmd2 = new MySqlCommand($"DELETE FROM `{_tablePrefix}reply` WHERE username = @username", connection);
+                cmd2.Parameters.AddWithValue("@username", username);
+                var deleted2 = await cmd2.ExecuteNonQueryAsync();
+
+                // Delete from radusergroup
+                using var cmd3 = new MySqlCommand($"DELETE FROM `{_tablePrefix}usergroup` WHERE username = @username", connection);
+                cmd3.Parameters.AddWithValue("@username", username);
+                var deleted3 = await cmd3.ExecuteNonQueryAsync();
+
+                _logger.LogInformation("Deleted user {Username} from FreeRADIUS: {Check} check, {Reply} reply, {Group} group entries",
+                    username, deleted1, deleted2, deleted3);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting user {Username} from FreeRADIUS", username);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Delete ALL users from FreeRADIUS (clear database)
+        /// </summary>
+        public async Task<(int deleted, string message)> DeleteAllUsersAsync()
+        {
+            await EnsureConfigLoadedAsync();
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+                return (0, "FreeRADIUS not enabled");
+
+            try
+            {
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                int totalDeleted = 0;
+
+                // Delete from radcheck
+                using var cmd1 = new MySqlCommand($"DELETE FROM `{_tablePrefix}check`", connection);
+                totalDeleted += await cmd1.ExecuteNonQueryAsync();
+
+                // Delete from radreply
+                using var cmd2 = new MySqlCommand($"DELETE FROM `{_tablePrefix}reply`", connection);
+                totalDeleted += await cmd2.ExecuteNonQueryAsync();
+
+                // Delete from radusergroup
+                using var cmd3 = new MySqlCommand($"DELETE FROM `{_tablePrefix}usergroup`", connection);
+                totalDeleted += await cmd3.ExecuteNonQueryAsync();
+
+                // Clear accounting (optional - keeps history)
+                // using var cmd4 = new MySqlCommand($"DELETE FROM `{_tablePrefix}acct`", connection);
+                // totalDeleted += await cmd4.ExecuteNonQueryAsync();
+
+                _logger.LogInformation("Deleted all users from FreeRADIUS: {Total} total entries", totalDeleted);
+
+                return (totalDeleted, $"Deleted {totalDeleted} entries from FreeRADIUS");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting all users from FreeRADIUS");
+                return (0, ex.Message);
             }
         }
 

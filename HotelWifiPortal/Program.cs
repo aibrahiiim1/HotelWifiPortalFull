@@ -118,6 +118,9 @@ builder.Services.AddScoped<WifiService>();
 builder.Services.AddScoped<MikrotikAuthService>();
 builder.Services.AddHostedService<WifiMonitoringService>();
 
+// PMS Auto-Posting Service (monitors PMS connection and posts pending payments)
+builder.Services.AddHostedService<PmsPostingService>();
+
 // SignalR
 builder.Services.AddSignalR();
 

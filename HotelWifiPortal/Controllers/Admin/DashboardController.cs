@@ -58,9 +58,9 @@ namespace HotelWifiPortal.Controllers.Admin
                     var state = ModelState[key];
                     if (state?.Errors.Count > 0)
                     {
-                        foreach (var errors in state.Errors)
+                        foreach (var errorr in state.Errors)
                         {
-                            _logger.LogWarning("ModelState Error - {Key}: {Error}", key, errors.ErrorMessage);
+                            _logger.LogWarning("ModelState Error - {Key}: {Error}", key, errorr.ErrorMessage);
                         }
                     }
                 }
@@ -113,6 +113,11 @@ namespace HotelWifiPortal.Controllers.Admin
             var (todayRevenue, _) = await _paymentService.GetRevenueStatsAsync(today, today.AddDays(1));
             var (monthRevenue, _) = await _paymentService.GetRevenueStatsAsync(monthStart, today.AddDays(1));
 
+            // Get pending PMS postings
+            var pendingTransactions = await _dbContext.PaymentTransactions
+                .Where(t => !t.PostedToPMS && (t.Status == "Completed" || t.Status == "PostedToPMS"))
+                .ToListAsync();
+
             var wifiControllers = await _dbContext.WifiControllerSettings
                 .Where(w => w.IsEnabled)
                 .Select(w => new WifiControllerStatus
@@ -136,6 +141,9 @@ namespace HotelWifiPortal.Controllers.Admin
                 PmsStatus = pmsStatus.Status,
                 MessagesSent = pmsStatus.MessagesSent,
                 MessagesReceived = pmsStatus.MessagesReceived,
+
+                PendingPmsPostings = pendingTransactions.Count,
+                PendingPmsAmount = pendingTransactions.Sum(t => t.Amount),
 
                 WifiControllers = wifiControllers,
 

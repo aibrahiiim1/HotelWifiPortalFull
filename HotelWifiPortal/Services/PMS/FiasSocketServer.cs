@@ -37,7 +37,7 @@ namespace HotelWifiPortal.Services.PMS
 
         public void SetPort(int port) => _port = port;
 
-        public (bool IsConnected, string Status, DateTime? LastConnectionTime, DateTime? LastMessageTime,
+        public (bool IsConnected, string Status, DateTime? LastConnectionTime, DateTime? LastMessageTime, 
                 int MessagesSent, int MessagesReceived, string? ClientIpAddress) GetStatus()
         {
             return (
@@ -69,7 +69,7 @@ namespace HotelWifiPortal.Services.PMS
                     try
                     {
                         _logger.LogInformation("Waiting for PMS connection...");
-
+                        
                         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                         _client = await _listener.AcceptTcpClientAsync(cts.Token);
                         _stream = _client.GetStream();
@@ -216,8 +216,8 @@ namespace HotelWifiPortal.Services.PMS
 
         private async Task ProcessMessageAsync(FiasMessage message)
         {
-            _logger.LogInformation("FIAS Message received: Type={Type}, Fields={Fields}",
-                message.RecordId,
+            _logger.LogInformation("FIAS Message received: Type={Type}, Fields={Fields}", 
+                message.RecordId, 
                 string.Join(", ", message.Fields.Select(f => $"{f.Key}={f.Value}")));
 
             var needsAck = message.RecordId switch
@@ -247,7 +247,7 @@ namespace HotelWifiPortal.Services.PMS
                     { "DA", DateTime.Now.ToString("yyMMdd") },
                     { "TI", DateTime.Now.ToString("HHmmss") }
                 });
-
+                
                 // Wait a bit then request database resync
                 _ = Task.Run(async () =>
                 {
@@ -333,7 +333,7 @@ namespace HotelWifiPortal.Services.PMS
             });
         }
 
-        public async Task PostChargeAsync(string roomNumber, string reservationNumber, decimal amount, string description)
+        public async Task PostChargeAsync(string roomNumber, string reservationNumber, decimal amount, string description, bool postByReservationNumber = false)
         {
             if (!IsConnected)
             {
@@ -341,9 +341,17 @@ namespace HotelWifiPortal.Services.PMS
                 return;
             }
 
-            var message = _protocolService.BuildPostingMessage(roomNumber, reservationNumber, amount, description);
+            var message = _protocolService.BuildPostingMessage(roomNumber, reservationNumber, amount, description, postByReservationNumber);
             await SendRawMessageAsync(message);
-            _logger.LogInformation("Posted charge to PMS: Room {Room}, Amount {Amount}", roomNumber, amount);
+            
+            if (postByReservationNumber)
+            {
+                _logger.LogInformation("Posted charge to PMS by Reservation#: {Reservation}, Amount {Amount}", reservationNumber, amount);
+            }
+            else
+            {
+                _logger.LogInformation("Posted charge to PMS by Room: {Room}, Amount {Amount}", roomNumber, amount);
+            }
         }
     }
 
@@ -364,7 +372,7 @@ namespace HotelWifiPortal.Services.PMS
         {
             // Wait for app to start
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-
+            
             try
             {
                 // Get PMS settings

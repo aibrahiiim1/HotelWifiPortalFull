@@ -51,6 +51,19 @@ namespace HotelWifiPortal.Models.Entities
         public DateTime? LastWifiLogin { get; set; }
         public DateTime? QuotaResetDate { get; set; }
 
+        // Assigned bandwidth profile (for speed limits)
+        public int? BandwidthProfileId { get; set; }
+
+        // WiFi Password System
+        // WifiPassword is the actual password used for WiFi authentication
+        // PasswordResetRequired = true means guest must set a new password on first login
+        [MaxLength(20)]
+        public string? WifiPassword { get; set; }
+
+        public bool PasswordResetRequired { get; set; } = true; // Default: require password reset on first login
+
+        public DateTime? PasswordSetAt { get; set; } // When the password was last set
+
         // Source: PMS or Local
         [MaxLength(20)]
         public string Source { get; set; } = "PMS";
@@ -104,5 +117,11 @@ namespace HotelWifiPortal.Models.Entities
 
         [NotMapped]
         public string? CurrentPackage { get; set; }
+
+        /// <summary>
+        /// Check if guest needs to set a new password
+        /// </summary>
+        [NotMapped]
+        public bool NeedsPasswordReset => PasswordResetRequired || string.IsNullOrEmpty(WifiPassword);
     }
 }

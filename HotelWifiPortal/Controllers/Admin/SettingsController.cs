@@ -117,6 +117,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 IsEnabled = pmsSettings.IsEnabled,
                 IsPmsModeEnabled = pmsSettings.IsPmsModeEnabled,
                 AutoPostCharges = pmsSettings.AutoPostCharges,
+                PostByReservationNumber = pmsSettings.PostByReservationNumber,
                 PostingCurrency = pmsSettings.PostingCurrency,
                 PostingDescription = pmsSettings.PostingDescription,
                 IsConnected = status.IsConnected,
@@ -148,13 +149,14 @@ namespace HotelWifiPortal.Controllers.Admin
             pmsSettings.IsEnabled = model.IsEnabled;
             pmsSettings.IsPmsModeEnabled = model.IsPmsModeEnabled;
             pmsSettings.AutoPostCharges = model.AutoPostCharges;
+            pmsSettings.PostByReservationNumber = model.PostByReservationNumber;
             pmsSettings.PostingCurrency = model.PostingCurrency;
             pmsSettings.PostingDescription = model.PostingDescription;
             pmsSettings.UpdatedAt = DateTime.UtcNow;
 
             await _dbContext.SaveChangesAsync();
 
-            _logger.LogInformation("PMS settings updated");
+            _logger.LogInformation("PMS settings updated. PostByReservationNumber: {Mode}", model.PostByReservationNumber);
             TempData["Success"] = "PMS settings saved. Restart application to apply port changes.";
 
             return RedirectToAction(nameof(Pms));
@@ -1692,13 +1694,17 @@ namespace HotelWifiPortal.Controllers.Admin
         [IgnoreAntiforgeryToken]
         public async Task<IActionResult> FreeRadiusSyncUsers()
         {
+            var logs = new List<string>();
             try
             {
+                logs.Add("Starting guest sync...");
+
                 using var scope = HttpContext.RequestServices.CreateScope();
                 var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
 
                 // Force reload configuration from database
                 await freeRadiusService.LoadConfigurationFromDatabaseAsync();
+                logs.Add("Configuration loaded");
 
                 // Count checked-in guests (matching the service query)
                 var guests = await _dbContext.Guests
@@ -1706,6 +1712,8 @@ namespace HotelWifiPortal.Controllers.Admin
                                g.Status.ToLower() == "checkedin" ||
                                g.Status == "CheckedIn")
                     .ToListAsync();
+
+                logs.Add($"Found {guests.Count} checked-in guests");
 
                 if (guests.Count == 0)
                 {
@@ -1716,22 +1724,41 @@ namespace HotelWifiPortal.Controllers.Admin
                         .ToListAsync();
 
                     var totalGuests = await _dbContext.Guests.CountAsync();
+                    logs.Add($"Total guests in database: {totalGuests}");
+                    logs.Add($"Existing statuses: [{string.Join(", ", allStatuses)}]");
 
                     return Json(new
                     {
                         success = true,
-                        message = $"No checked-in guests found. Total guests: {totalGuests}. Existing statuses: [{string.Join(", ", allStatuses)}]"
+                        message = $"No checked-in guests found. Total guests: {totalGuests}. Existing statuses: [{string.Join(", ", allStatuses)}]",
+                        syncedCount = 0,
+                        logs
                     });
                 }
 
-                await freeRadiusService.SyncAllGuestsAsync();
+                // Log each guest being synced
+                foreach (var g in guests.Take(10))
+                {
+                    logs.Add($"Syncing: Room {g.RoomNumber} - {g.GuestName}");
+                }
+                if (guests.Count > 10) logs.Add($"... and {guests.Count - 10} more");
 
-                return Json(new { success = true, message = $"Synced {guests.Count} guests to FreeRADIUS" });
+                await freeRadiusService.SyncAllGuestsAsync();
+                logs.Add("Sync completed successfully");
+
+                return Json(new
+                {
+                    success = true,
+                    message = $"Synced {guests.Count} guests to FreeRADIUS",
+                    syncedCount = guests.Count,
+                    logs
+                });
             }
             catch (Exception ex)
             {
+                logs.Add($"ERROR: {ex.Message}");
                 _logger.LogError(ex, "Error syncing users to FreeRADIUS");
-                return Json(new { success = false, message = ex.Message });
+                return Json(new { success = false, message = ex.Message, logs });
             }
         }
 
@@ -1742,18 +1769,38 @@ namespace HotelWifiPortal.Controllers.Admin
         [IgnoreAntiforgeryToken]
         public async Task<IActionResult> FreeRadiusSyncProfiles()
         {
+            var logs = new List<string>();
             try
             {
+                logs.Add("Starting profile sync...");
+
                 using var scope = HttpContext.RequestServices.CreateScope();
                 var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
 
-                await freeRadiusService.SyncBandwidthProfilesAsync();
+                // Get active profiles
+                var profiles = await _dbContext.BandwidthProfiles.Where(p => p.IsActive).ToListAsync();
+                logs.Add($"Found {profiles.Count} active bandwidth profiles");
 
-                return Json(new { success = true, message = "Profiles synced successfully" });
+                foreach (var p in profiles)
+                {
+                    logs.Add($"Profile: {p.Name} ({p.DownloadSpeedKbps}kbps down / {p.UploadSpeedKbps}kbps up)");
+                }
+
+                await freeRadiusService.SyncBandwidthProfilesAsync();
+                logs.Add("Profiles synced to FreeRADIUS radgroupreply");
+
+                return Json(new
+                {
+                    success = true,
+                    message = $"Synced {profiles.Count} profiles successfully",
+                    syncedCount = profiles.Count,
+                    logs
+                });
             }
             catch (Exception ex)
             {
-                return Json(new { success = false, message = ex.Message });
+                logs.Add($"ERROR: {ex.Message}");
+                return Json(new { success = false, message = ex.Message, logs });
             }
         }
 
@@ -1898,18 +1945,38 @@ namespace HotelWifiPortal.Controllers.Admin
         [IgnoreAntiforgeryToken]
         public async Task<IActionResult> FreeRadiusInitDatabase()
         {
+            var logs = new List<string>();
             try
             {
+                logs.Add("Starting database initialization...");
+
                 using var scope = HttpContext.RequestServices.CreateScope();
                 var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
 
+                logs.Add("Connecting to MySQL...");
                 var result = await freeRadiusService.InitializeDatabaseAsync();
 
-                return Json(new { success = result, message = result ? "Database initialized successfully" : "Database initialization failed" });
+                if (result)
+                {
+                    logs.Add("Created/verified tables: radcheck, radreply, radgroupcheck, radgroupreply, radusergroup, radacct, radpostauth, nas");
+                    logs.Add("Database initialization completed successfully");
+                }
+                else
+                {
+                    logs.Add("Database initialization returned false - check connection settings");
+                }
+
+                return Json(new
+                {
+                    success = result,
+                    message = result ? "Database initialized successfully" : "Database initialization failed",
+                    logs
+                });
             }
             catch (Exception ex)
             {
-                return Json(new { success = false, message = ex.Message });
+                logs.Add($"ERROR: {ex.Message}");
+                return Json(new { success = false, message = ex.Message, logs });
             }
         }
 
@@ -1920,19 +1987,191 @@ namespace HotelWifiPortal.Controllers.Admin
         [IgnoreAntiforgeryToken]
         public async Task<IActionResult> FreeRadiusCleanup()
         {
+            var logs = new List<string>();
             try
             {
+                logs.Add("Starting cleanup of checked-out guests...");
+
                 using var scope = HttpContext.RequestServices.CreateScope();
                 var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
 
-                await freeRadiusService.CleanupCheckedOutGuestsAsync();
+                // Count checked-out guests
+                var checkedOutGuests = await _dbContext.Guests
+                    .Where(g => g.Status.ToLower() == "checked-out" || g.Status.ToLower() == "checkedout")
+                    .CountAsync();
+                logs.Add($"Found {checkedOutGuests} checked-out guests to remove");
 
-                return Json(new { success = true, message = "Cleanup completed" });
+                await freeRadiusService.CleanupCheckedOutGuestsAsync();
+                logs.Add("Cleanup completed - removed from radcheck and radreply tables");
+
+                return Json(new
+                {
+                    success = true,
+                    message = $"Cleanup completed - removed {checkedOutGuests} users",
+                    removedCount = checkedOutGuests,
+                    logs
+                });
             }
             catch (Exception ex)
             {
-                return Json(new { success = false, message = ex.Message });
+                logs.Add($"ERROR: {ex.Message}");
+                return Json(new { success = false, message = ex.Message, logs });
             }
+        }
+
+        /// <summary>
+        /// Delete a specific user from FreeRADIUS
+        /// </summary>
+        [HttpPost]
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> FreeRadiusDeleteUser([FromBody] DeleteUserRequest request)
+        {
+            var logs = new List<string>();
+            try
+            {
+                if (string.IsNullOrEmpty(request?.Username))
+                {
+                    return Json(new { success = false, message = "Username is required" });
+                }
+
+                logs.Add($"Deleting user: {request.Username}");
+
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
+
+                var result = await freeRadiusService.DeleteUserAsync(request.Username);
+
+                if (result)
+                {
+                    logs.Add("User deleted from radcheck, radreply, radusergroup");
+
+                    // Also update portal database if guest exists
+                    var guest = await _dbContext.Guests.FirstOrDefaultAsync(g => g.RoomNumber == request.Username);
+                    if (guest != null && request.ResetUsage)
+                    {
+                        guest.UsedQuotaBytes = 0;
+                        await _dbContext.SaveChangesAsync();
+                        logs.Add($"Reset usage for guest in Room {request.Username}");
+                    }
+                }
+
+                return Json(new
+                {
+                    success = result,
+                    message = result ? $"User {request.Username} deleted successfully" : "Failed to delete user",
+                    logs
+                });
+            }
+            catch (Exception ex)
+            {
+                logs.Add($"ERROR: {ex.Message}");
+                return Json(new { success = false, message = ex.Message, logs });
+            }
+        }
+
+        /// <summary>
+        /// Delete ALL users from FreeRADIUS
+        /// </summary>
+        [HttpPost]
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> FreeRadiusDeleteAllUsers()
+        {
+            var logs = new List<string>();
+            try
+            {
+                logs.Add("Starting deletion of ALL users from FreeRADIUS...");
+
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
+
+                var (deleted, message) = await freeRadiusService.DeleteAllUsersAsync();
+
+                logs.Add(message);
+                logs.Add("Tables cleared: radcheck, radreply, radusergroup");
+
+                return Json(new
+                {
+                    success = deleted > 0 || message.Contains("Deleted"),
+                    message = message,
+                    deletedCount = deleted,
+                    logs
+                });
+            }
+            catch (Exception ex)
+            {
+                logs.Add($"ERROR: {ex.Message}");
+                return Json(new { success = false, message = ex.Message, logs });
+            }
+        }
+
+        /// <summary>
+        /// Reset guest usage in portal and optionally FreeRADIUS
+        /// </summary>
+        [HttpPost]
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> FreeRadiusResetGuestUsage([FromBody] DeleteUserRequest request)
+        {
+            var logs = new List<string>();
+            try
+            {
+                if (string.IsNullOrEmpty(request?.Username))
+                {
+                    return Json(new { success = false, message = "Username/Room number is required" });
+                }
+
+                logs.Add($"Resetting usage for: {request.Username}");
+
+                // Reset in portal database
+                var guest = await _dbContext.Guests.FirstOrDefaultAsync(g => g.RoomNumber == request.Username);
+                if (guest != null)
+                {
+                    var oldUsage = guest.UsedQuotaBytes;
+                    guest.UsedQuotaBytes = 0;
+                    await _dbContext.SaveChangesAsync();
+                    logs.Add($"Portal: Reset usage from {oldUsage / 1048576.0:N2}MB to 0");
+                }
+                else
+                {
+                    logs.Add($"Guest not found in portal: {request.Username}");
+                }
+
+                // Reset in FreeRADIUS radacct
+                var settings = await _dbContext.SystemSettings.ToListAsync();
+                var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                if (!string.IsNullOrEmpty(connStr))
+                {
+                    using var connection = new MySqlConnector.MySqlConnection(connStr);
+                    await connection.OpenAsync();
+
+                    // Update existing accounting records to zero
+                    using var cmd = new MySqlConnector.MySqlCommand(
+                        $"UPDATE {prefix}acct SET acctinputoctets = 0, acctoutputoctets = 0 WHERE username = @username",
+                        connection);
+                    cmd.Parameters.AddWithValue("@username", request.Username);
+                    var updated = await cmd.ExecuteNonQueryAsync();
+                    logs.Add($"FreeRADIUS: Reset {updated} accounting records");
+                }
+
+                return Json(new
+                {
+                    success = true,
+                    message = $"Usage reset for {request.Username}",
+                    logs
+                });
+            }
+            catch (Exception ex)
+            {
+                logs.Add($"ERROR: {ex.Message}");
+                return Json(new { success = false, message = ex.Message, logs });
+            }
+        }
+
+        public class DeleteUserRequest
+        {
+            public string Username { get; set; } = "";
+            public bool ResetUsage { get; set; }
         }
 
         /// <summary>

@@ -95,19 +95,67 @@
                 </div>
             </div>
             <div class="col-lg-4">
-                <div class="card mb-3">
-                    <div class="card-header"><i class="bi bi-lightning me-2"></i>Quick Actions</div>
+                <div class="card mb-3 border-primary">
+                    <div class="card-header bg-primary text-white"><i class="bi bi-lightning-charge me-2"></i>Quick Actions</div>
                     <div class="card-body">
                         <div class="d-grid gap-2">
-                            <button class="btn btn-outline-primary" onclick="initializeDatabase()"><i class="bi bi-database-add me-2"></i>Initialize Database</button>
-                            <button class="btn btn-outline-success" onclick="syncAllUsers()"><i class="bi bi-arrow-repeat me-2"></i>Sync All Guests</button>
-                            <button class="btn btn-outline-info" onclick="syncBandwidthProfiles()"><i class="bi bi-speedometer me-2"></i>Sync Profiles</button>
-                            <button class="btn btn-outline-secondary" onclick="syncAccounting()"><i class="bi bi-graph-up me-2"></i>Sync Usage Data</button>
-                            <button class="btn btn-outline-warning" onclick="cleanupOldUsers()"><i class="bi bi-trash me-2"></i>Cleanup</button>
+                            <button class="btn btn-primary" onclick="initializeDatabase()" id="btnInitDb">
+                                <i class="bi bi-database-add me-2"></i>Initialize Database
+                                <small class="d-block text-light opacity-75">Create radcheck, radreply, radacct tables</small>
+                            </button>
+                            <button class="btn btn-success" onclick="syncAllUsers()" id="btnSyncUsers">
+                                <i class="bi bi-people me-2"></i>Sync All Guests
+                                <small class="d-block text-light opacity-75">Add checked-in guests to radcheck</small>
+                            </button>
+                            <button class="btn btn-info text-white" onclick="syncBandwidthProfiles()" id="btnSyncProfiles">
+                                <i class="bi bi-speedometer2 me-2"></i>Sync Bandwidth Profiles
+                                <small class="d-block text-light opacity-75">Update radreply with speed limits</small>
+                            </button>
+                            <button class="btn btn-secondary" onclick="syncAccounting()" id="btnSyncUsage">
+                                <i class="bi bi-graph-up me-2"></i>Sync Usage Data
+                                <small class="d-block text-light opacity-75">Import usage from radacct table</small>
+                            </button>
+                            <button class="btn btn-warning" onclick="cleanupOldUsers()" id="btnCleanup">
+                                <i class="bi bi-trash me-2"></i>Cleanup Old Users
+                                <small class="d-block opacity-75">Remove checked-out guests</small>
+                            </button>
+                            <hr class="my-2">
+                            <button class="btn btn-outline-danger" onclick="deleteAllUsers()" id="btnDeleteAll">
+                                <i class="bi bi-trash3 me-2"></i>Delete All RADIUS Users
+                                <small class="d-block">Clear radcheck, radreply, radusergroup</small>
+                            </button>
                         </div>
                         <div id="actionResult" class="mt-3"></div>
+                        <div id="actionLogs" class="mt-2" style="max-height: 200px; overflow-y: auto; font-size: 11px;"></div>
                     </div>
                 </div>
+                
+                <!-- Delete Specific User Card -->
+                <div class="card mb-3 border-danger">
+                    <div class="card-header bg-danger text-white"><i class="bi bi-person-x me-2"></i>Delete / Reset User</div>
+                    <div class="card-body">
+                        <form id="deleteUserForm" onsubmit="deleteUser(event)">
+                            <div class="mb-2">
+                                <label class="form-label small">Room Number / Username</label>
+                                <input type="text" class="form-control form-control-sm" id="deleteUsername" placeholder="e.g., 3300" required>
+                            </div>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="resetUsageCheck" checked>
+                                <label class="form-check-label small" for="resetUsageCheck">Also reset usage in portal</label>
+                            </div>
+                            <div class="d-grid gap-1">
+                                <button type="submit" class="btn btn-danger btn-sm">
+                                    <i class="bi bi-trash me-1"></i>Delete from RADIUS
+                                </button>
+                                <button type="button" class="btn btn-outline-warning btn-sm" onclick="resetUserUsage()">
+                                    <i class="bi bi-arrow-counterclockwise me-1"></i>Reset Usage Only
+                                </button>
+                            </div>
+                        </form>
+                        <div id="deleteUserResult" class="mt-2"></div>
+                    </div>
+                </div>
+                
                 <div class="card">
                     <div class="card-header d-flex justify-content-between"><span><i class="bi bi-info-circle me-2"></i>Status</span><button class="btn btn-sm btn-outline-primary" onclick="refreshStatus()"><i class="bi bi-arrow-clockwise"></i></button></div>
                     <div class="card-body" id="connectionStatus"><div class="text-center py-3"><div class="spinner-border spinner-border-sm"></div></div></div>
@@ -314,12 +362,96 @@ async function testCoa(e) { e.preventDefault(); const r=document.getElementById(
 async function sendRadiusPacket(e) { e.preventDefault(); const rd=document.getElementById('radiusResponse'),rq=document.getElementById('requestPacketDetails'),rs=document.getElementById('responsePacketDetails'); rd.innerHTML='<div class="text-center py-4"><div class="spinner-border text-light"></div></div>'; const f=e.target; try{const res=await fetch(`${apiBase}/FreeRadiusSendPacket`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serverIp:f.serverIp.value,serverPort:parseInt(f.serverPort.value),secret:f.secret.value,requestType:f.requestType.value,authProtocol:f.authProtocol.value,username:f.username.value,password:f.password.value,sessionId:f.sessionId.value,framedIp:f.framedIp?.value,sessionTime:parseInt(f.sessionTime?.value)||0,inputBytes:parseInt(f.inputBytes?.value)||0,outputBytes:parseInt(f.outputBytes?.value)||0,nasIdentifier:f.nasIdentifier.value,nasIpAddress:f.nasIpAddress.value,callingStationId:f.callingStationId.value,timeout:parseInt(f.timeout.value)||5})});const data=await res.json();if(data.success){let a='';if(data.attributes)data.attributes.forEach(x=>a+=`<span class="radius-attr">${x.name}=${x.value}</span> `);rd.innerHTML=`<div class="mb-3"><span class="badge fs-6 ${data.responseCode.includes('Accept')||data.responseCode.includes('Response')?'bg-success':data.responseCode.includes('Reject')?'bg-danger':'bg-warning'}">${data.responseCode}</span><span class="ms-2 text-muted">${data.roundTripMs}ms</span></div><div class="mb-2"><strong>Attributes:</strong></div><div>${a||'<span class="text-muted">None</span>'}</div>`;}else{rd.innerHTML=`<div class="text-danger text-center py-3"><i class="bi bi-x-circle" style="font-size:2rem"></i><div class="mt-2"><strong>${data.error||'Failed'}</strong></div><div class="small">${data.message||''}</div></div>`;}if(data.requestHex)rq.innerHTML=data.requestHex;if(data.responseHex)rs.innerHTML=data.responseHex;}catch(err){rd.innerHTML=`<div class="text-danger text-center py-3">${err.message}</div>`;} }
 function clearResponse() { document.getElementById('radiusResponse').innerHTML='<div class="text-muted text-center py-5"><i class="bi bi-arrow-left-circle" style="font-size:3rem"></i></div>'; document.getElementById('requestPacketDetails').innerHTML='<span class="text-muted">No request</span>'; document.getElementById('responsePacketDetails').innerHTML='<span class="text-muted">No response</span>'; }
 
-async function syncAllUsers() { await doAction('FreeRadiusSyncUsers','Syncing...'); }
-async function syncBandwidthProfiles() { await doAction('FreeRadiusSyncProfiles','Syncing...'); }
-async function syncAccounting() { await doAction('FreeRadiusSyncAccounting','Syncing usage data...'); }
-async function initializeDatabase() { if(confirm('Create tables?')) await doAction('FreeRadiusInitDatabase','Initializing...'); }
-async function cleanupOldUsers() { await doAction('FreeRadiusCleanup','Cleaning...'); }
-async function doAction(endpoint, msg) { const r=document.getElementById('actionResult'); r.innerHTML=`<div class="spinner-border spinner-border-sm"></div> ${msg}`; try{const res=await fetch(`${apiBase}/${endpoint}`,{method:'POST'});const data=await res.json();r.innerHTML=`<div class="alert alert-${data.success?'success':'danger'} py-2 mb-0">${data.message}</div>`;if(data.success)showNotification('Success',data.message,'success');}catch(err){r.innerHTML=`<div class="alert alert-danger py-2 mb-0">${err.message}</div>`;} }
+async function syncAllUsers() { await doAction('FreeRadiusSyncUsers','Syncing guests...', 'btnSyncUsers'); }
+async function syncBandwidthProfiles() { await doAction('FreeRadiusSyncProfiles','Syncing profiles...', 'btnSyncProfiles'); }
+async function syncAccounting() { await doAction('FreeRadiusSyncAccounting','Syncing usage data...', 'btnSyncUsage'); }
+async function initializeDatabase() { if(confirm('This will create FreeRADIUS tables (radcheck, radreply, radacct, etc). Continue?')) await doAction('FreeRadiusInitDatabase','Initializing database...', 'btnInitDb'); }
+async function cleanupOldUsers() { if(confirm('Remove all checked-out guests from FreeRADIUS?')) await doAction('FreeRadiusCleanup','Cleaning up...', 'btnCleanup'); }
+async function deleteAllUsers() { if(confirm('⚠️ WARNING: This will DELETE ALL users from FreeRADIUS!\n\nAll entries in radcheck, radreply, and radusergroup will be removed.\n\nAre you absolutely sure?')) await doAction('FreeRadiusDeleteAllUsers','Deleting all users...', 'btnDeleteAll'); }
+
+async function deleteUser(e) {
+    e.preventDefault();
+    const username = document.getElementById('deleteUsername').value;
+    const resetUsage = document.getElementById('resetUsageCheck').checked;
+    const r = document.getElementById('deleteUserResult');
+    
+    if(!username) { r.innerHTML='<div class="alert alert-warning py-1 small">Enter username</div>'; return; }
+    if(!confirm(`Delete user "${username}" from FreeRADIUS?`)) return;
+    
+    r.innerHTML='<div class="spinner-border spinner-border-sm"></div>';
+    try {
+        const res = await fetch(`${apiBase}/FreeRadiusDeleteUser`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ username, resetUsage })
+        });
+        const data = await res.json();
+        r.innerHTML = `<div class="alert alert-${data.success?'success':'danger'} py-1 small">${data.message}</div>`;
+        if(data.logs) {
+            let logHtml='<div class="small text-muted mt-1">';
+            data.logs.forEach(l=>logHtml+=`<div>${l}</div>`);
+            r.innerHTML += logHtml+'</div>';
+        }
+        if(data.success) { document.getElementById('deleteUsername').value=''; loadRadiusUsers(); }
+    } catch(err) { r.innerHTML=`<div class="alert alert-danger py-1 small">${err.message}</div>`; }
+}
+
+async function resetUserUsage() {
+    const username = document.getElementById('deleteUsername').value;
+    const r = document.getElementById('deleteUserResult');
+    
+    if(!username) { r.innerHTML='<div class="alert alert-warning py-1 small">Enter username</div>'; return; }
+    
+    r.innerHTML='<div class="spinner-border spinner-border-sm"></div>';
+    try {
+        const res = await fetch(`${apiBase}/FreeRadiusResetGuestUsage`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ username })
+        });
+        const data = await res.json();
+        r.innerHTML = `<div class="alert alert-${data.success?'success':'danger'} py-1 small">${data.message}</div>`;
+        if(data.logs) {
+            let logHtml='<div class="small text-muted mt-1">';
+            data.logs.forEach(l=>logHtml+=`<div>${l}</div>`);
+            r.innerHTML += logHtml+'</div>';
+        }
+    } catch(err) { r.innerHTML=`<div class="alert alert-danger py-1 small">${err.message}</div>`; }
+}
+
+async function doAction(endpoint, msg, btnId) { 
+    const r=document.getElementById('actionResult'); 
+    const logs=document.getElementById('actionLogs');
+    const btn=btnId?document.getElementById(btnId):null;
+    const originalHtml=btn?btn.innerHTML:'';
+    if(btn){btn.disabled=true;btn.innerHTML=`<span class="spinner-border spinner-border-sm me-2"></span>${msg}`;}
+    r.innerHTML=`<div class="alert alert-info py-2 mb-0"><i class="bi bi-hourglass-split me-2"></i>${msg}</div>`; 
+    logs.innerHTML='';
+    try{
+        const res=await fetch(`${apiBase}/${endpoint}`,{method:'POST'});
+        const data=await res.json();
+        r.innerHTML=`<div class="alert alert-${data.success?'success':'danger'} py-2 mb-0"><i class="bi bi-${data.success?'check-circle':'x-circle'} me-2"></i>${data.message}</div>`;
+        if(data.success)showNotification('Success',data.message,'success');
+        // Show detailed logs if available
+        if(data.logs&&data.logs.length>0){
+            let logHtml='<div class="bg-dark text-light p-2 rounded"><small>';
+            data.logs.forEach(l=>logHtml+=`<div class="text-${l.includes('ERROR')?'danger':l.includes('->') ?'success':'info'}">${l}</div>`);
+            logHtml+='</small></div>';
+            logs.innerHTML=logHtml;
+        }
+        // Show counts if available
+        if(data.updatedGuests!==undefined||data.updatedSessions!==undefined){
+            r.innerHTML+=`<div class="mt-2 small text-muted">Updated: ${data.updatedGuests||0} guests, ${data.updatedSessions||0} sessions</div>`;
+        }
+        if(data.syncedCount!==undefined){
+            r.innerHTML+=`<div class="mt-2 small text-muted">Synced: ${data.syncedCount} users</div>`;
+        }
+    }catch(err){
+        r.innerHTML=`<div class="alert alert-danger py-2 mb-0"><i class="bi bi-x-circle me-2"></i>${err.message}</div>`;
+    }finally{
+        if(btn){btn.disabled=false;btn.innerHTML=originalHtml;}
+    }
+}
 
 async function loadRadiusUsers() { const c=document.getElementById('radiusUsersTable'); c.innerHTML='<div class="text-center py-3"><div class="spinner-border"></div></div>'; try{const res=await fetch(`${apiBase}/FreeRadiusGetUsers`);const data=await res.json();if(data.users?.length>0){let h='<table class="table table-sm table-striped mb-0"><thead><tr><th>User</th><th>Attr</th><th>Value</th></tr></thead><tbody>';data.users.forEach(u=>h+=`<tr><td><code>${u.username}</code></td><td>${u.attribute}</td><td class="text-truncate" style="max-width:100px">${u.value}</td></tr>`);c.innerHTML=h+'</tbody></table>';}else c.innerHTML=`<div class="text-center py-4 text-muted">${data.message||'No users'}</div>`;}catch(err){c.innerHTML=`<div class="alert alert-danger m-3">${err.message}</div>`;} }
 async function loadActiveSessions() { const c=document.getElementById('activeSessionsTable'); c.innerHTML='<div class="text-center py-3"><div class="spinner-border"></div></div>'; try{const res=await fetch(`${apiBase}/FreeRadiusGetSessions`);const data=await res.json();if(data.sessions?.length>0){let h='<table class="table table-sm table-striped mb-0"><thead><tr><th>User</th><th>IP</th><th>Duration</th><th>Usage</th></tr></thead><tbody>';data.sessions.forEach(s=>h+=`<tr><td><code>${s.username}</code></td><td>${s.ip}</td><td>${s.duration}</td><td>${s.usage}</td></tr>`);c.innerHTML=h+'</tbody></table>';}else c.innerHTML=`<div class="text-center py-4 text-muted">${data.message||'No sessions'}</div>`;}catch(err){c.innerHTML=`<div class="alert alert-danger m-3">${err.message}</div>`;} }

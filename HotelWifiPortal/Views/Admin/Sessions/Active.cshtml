@@ -2,6 +2,7 @@
 @{
     ViewData["Title"] = "Active WiFi Sessions";
     Layout = "~/Views/Shared/_AdminLayout.cshtml";
+    var guests = ViewBag.Guests as Dictionary<int, HotelWifiPortal.Models.Entities.Guest> ?? new Dictionary<int, HotelWifiPortal.Models.Entities.Guest>();
 }
 
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -23,6 +24,22 @@
 {
     <div class="alert alert-success alert-dismissible fade show">
         <i class="bi bi-check-circle me-2"></i>@TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Warning"] != null)
+{
+    <div class="alert alert-warning alert-dismissible fade show">
+        <i class="bi bi-exclamation-triangle me-2"></i>@TempData["Warning"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-x-circle me-2"></i>@TempData["Error"]
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 }
@@ -77,10 +94,10 @@
                         <th>Device</th>
                         <th>MAC Address</th>
                         <th>IP Address</th>
-                        <th>Started</th>
+                        <th>Quota Status</th>
                         <th>Duration</th>
                         <th>Data Used</th>
-                        <th>Actions</th>
+                        <th style="min-width: 200px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -88,24 +105,49 @@
                     {
                         @foreach (var session in Model.OrderBy(s => s.RoomNumber))
                         {
-                            <tr>
+                            var guest = guests.ContainsKey(session.GuestId) ? guests[session.GuestId] : null;
+                            var quotaPercent = guest != null && guest.TotalQuotaBytes > 0 
+                                ? (int)((guest.UsedQuotaBytes * 100) / guest.TotalQuotaBytes) 
+                                : 0;
+                            var isOverQuota = guest != null && guest.UsedQuotaBytes >= guest.TotalQuotaBytes;
+                            var quotaBarColor = quotaPercent > 100 ? "bg-danger" : quotaPercent > 80 ? "bg-warning" : "bg-success";
+                            
+                            <tr class="@(isOverQuota ? "table-danger" : "")">
                                 <td><strong>@session.RoomNumber</strong></td>
                                 <td>@session.GuestName</td>
                                 <td>
                                     <i class="bi bi-@(session.DeviceType == "Mobile" ? "phone" : session.DeviceType == "Tablet" ? "tablet" : "laptop") me-1"></i>
                                     @(session.DeviceType ?? "Unknown")
                                 </td>
-                                <td><code>@session.MacAddress</code></td>
+                                <td><code class="small">@session.MacAddress</code></td>
                                 <td>@session.IpAddress</td>
                                 <td>
-                                    @session.SessionStart.ToString("HH:mm:ss")<br />
-                                    <small class="text-muted">@session.SessionStart.ToString("MMM dd")</small>
+                                    @if (guest != null)
+                                    {
+                                        <div class="progress" style="height: 20px; min-width: 100px;">
+                                            <div class="progress-bar @quotaBarColor" style="width: @Math.Min(quotaPercent, 100)%">
+                                                @quotaPercent%
+                                            </div>
+                                        </div>
+                                        <small class="text-muted">
+                                            @((guest.UsedQuotaBytes / 1073741824.0).ToString("N2"))/@((guest.TotalQuotaBytes / 1073741824.0).ToString("N2")) GB
+                                        </small>
+                                        @if (isOverQuota)
+                                        {
+                                            <span class="badge bg-danger ms-1">EXCEEDED</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">N/A</span>
+                                    }
                                 </td>
                                 <td>
                                     @{
                                         var duration = DateTime.UtcNow - session.SessionStart;
                                     }
                                     <span class="badge bg-light text-dark">@duration.ToString(@"hh\:mm\:ss")</span>
+                                    <br /><small class="text-muted">@session.SessionStart.ToString("HH:mm MMM dd")</small>
                                 </td>
                                 <td>
                                     @{
@@ -121,13 +163,29 @@
                                     }
                                 </td>
                                 <td>
-                                    <form asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline">
-                                        @Html.AntiForgeryToken()
-                                        <button type="submit" class="btn btn-sm btn-outline-danger" 
-                                                onclick="return confirm('Disconnect this device?')">
-                                            <i class="bi bi-x-circle"></i> Disconnect
-                                        </button>
-                                    </form>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <form asp-action="ForceExpireQuota" asp-route-id="@session.Id" method="post" class="d-inline">
+                                            @Html.AntiForgeryToken()
+                                            <button type="submit" class="btn btn-warning" 
+                                                    title="Force expire quota - sets usage to maximum"
+                                                    onclick="return confirm('Force expire quota for Room @session.RoomNumber?\n\nThis will set their usage to exceed their quota limit and disconnect them.')">
+                                                <i class="bi bi-hourglass-bottom"></i> Expire
+                                            </button>
+                                        </form>
+                                        <form asp-action="Disconnect" asp-route-id="@session.Id" method="post" class="d-inline">
+                                            @Html.AntiForgeryToken()
+                                            <button type="submit" class="btn btn-outline-danger" 
+                                                    title="Disconnect this device"
+                                                    onclick="return confirm('Disconnect this device?')">
+                                                <i class="bi bi-x-circle"></i> Disconnect
+                                            </button>
+                                        </form>
+                                    </div>
+                                    <br />
+                                    <a asp-controller="Guests" asp-action="Edit" asp-route-id="@session.GuestId" 
+                                       class="btn btn-sm btn-link p-0 mt-1">
+                                        <i class="bi bi-pencil"></i> Edit Guest
+                                    </a>
                                 </td>
                             </tr>
                         }
@@ -145,6 +203,18 @@
                 </tbody>
             </table>
         </div>
+    </div>
+</div>
+
+<!-- Legend -->
+<div class="card mt-3">
+    <div class="card-body py-2">
+        <small class="text-muted">
+            <strong>Legend:</strong>
+            <span class="badge bg-danger ms-2">EXCEEDED</span> Quota exceeded
+            <span class="ms-3"><i class="bi bi-hourglass-bottom text-warning"></i> Expire</span> - Force quota to exceeded state and disconnect
+            <span class="ms-3"><i class="bi bi-x-circle text-danger"></i> Disconnect</span> - Just disconnect (can reconnect immediately)
+        </small>
     </div>
 </div>
 
