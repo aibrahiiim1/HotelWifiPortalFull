@@ -141,6 +141,74 @@ namespace HotelWifiPortal.Services.Radius
                 var sessionTimeout = Math.Max(0, (int)(checkoutTime - DateTime.UtcNow).TotalSeconds);
                 var remainingQuota = Math.Max(0, guest.TotalQuotaBytes - guest.UsedQuotaBytes);
 
+                // ============================================
+                // GET PACKAGE SETTINGS FOR SharedUsage
+                // ============================================
+                bool sharedUsage = true; // Default: room-level quota
+                int downloadKbps = profile?.DownloadSpeedKbps ?? 10240;
+                int uploadKbps = profile?.UploadSpeedKbps ?? 5120;
+                bool sharedBandwidth = true;
+
+                // Check for active paid package
+                var activePaidPackage = await dbContext.PaymentTransactions
+                    .Where(t => t.GuestId == guest.Id &&
+                               t.Status == "Completed" &&
+                               t.CompletedAt.HasValue &&
+                               t.CompletedAt.Value.AddHours(t.DurationHours ?? 24) > DateTime.UtcNow)
+                    .OrderByDescending(t => t.CompletedAt)
+                    .Select(t => t.PaidPackageId)
+                    .FirstOrDefaultAsync();
+
+                if (activePaidPackage > 0)
+                {
+                    var paidPackage = await dbContext.PaidPackages.FindAsync(activePaidPackage);
+                    if (paidPackage != null)
+                    {
+                        downloadKbps = paidPackage.DownloadSpeedKbps ?? 20480;
+                        uploadKbps = paidPackage.UploadSpeedKbps ?? 10240;
+                        sharedBandwidth = paidPackage.SharedBandwidth;
+                        sharedUsage = paidPackage.SharedUsage;
+                    }
+                }
+                else
+                {
+                    // Check free package based on stay length
+                    var stayLength = (guest.DepartureDate - guest.ArrivalDate).Days;
+                    var freePackage = await dbContext.BandwidthPackages
+                        .Where(p => p.IsActive && p.MinStayDays <= stayLength)
+                        .OrderByDescending(p => p.MinStayDays)
+                        .FirstOrDefaultAsync();
+
+                    if (freePackage != null)
+                    {
+                        downloadKbps = freePackage.DownloadSpeedKbps ?? 10240;
+                        uploadKbps = freePackage.UploadSpeedKbps ?? 5120;
+                        sharedBandwidth = freePackage.SharedBandwidth;
+                        sharedUsage = freePackage.SharedUsage;
+                    }
+                }
+
+                // ============================================
+                // QUOTA HANDLING FOR SHARED VS PER-DEVICE
+                // ============================================
+                // When SharedUsage = true: Do NOT send quota limit to FreeRADIUS
+                //   - Portal background service enforces room-level quota via CoA
+                // When SharedUsage = false: Send per-device quota
+                long quotaForDevice = 0;
+                if (!sharedUsage)
+                {
+                    // Per-device quota mode
+                    int maxDevices = 3;
+                    quotaForDevice = remainingQuota / maxDevices;
+                    _logger.LogDebug("FreeRADIUS: Per-device quota mode: {Quota}MB per device", quotaForDevice / 1048576);
+                }
+                else
+                {
+                    // Shared quota mode - don't send any limit to MikroTik
+                    quotaForDevice = 0;
+                    _logger.LogDebug("FreeRADIUS: Shared quota mode - no Mikrotik-Total-Limit sent (portal enforces)");
+                }
+
                 using var transaction = await connection.BeginTransactionAsync();
 
                 try
@@ -179,20 +247,21 @@ namespace HotelWifiPortal.Services.Radius
                         ("Reply-Message", "=", $"Welcome {guest.GuestName}! Room {guest.RoomNumber}")
                     };
 
-                    // Speed limit attributes
-                    if (profile != null)
+                    // Speed limit attributes - use calculated speeds with shared bandwidth logic
+                    if (downloadKbps > 0 && uploadKbps > 0)
                     {
-                        var rateLimit = $"{profile.UploadSpeedKbps}k/{profile.DownloadSpeedKbps}k";
+                        var rateLimit = $"{uploadKbps}k/{downloadKbps}k";
                         replyAttributes.Add(("Mikrotik-Rate-Limit", ":=", rateLimit));
-                        replyAttributes.Add(("WISPr-Bandwidth-Max-Up", ":=", (profile.UploadSpeedKbps * 1000).ToString()));
-                        replyAttributes.Add(("WISPr-Bandwidth-Max-Down", ":=", (profile.DownloadSpeedKbps * 1000).ToString()));
+                        replyAttributes.Add(("WISPr-Bandwidth-Max-Up", ":=", (uploadKbps * 1000).ToString()));
+                        replyAttributes.Add(("WISPr-Bandwidth-Max-Down", ":=", (downloadKbps * 1000).ToString()));
                     }
 
-                    // Data limit attributes
-                    if (remainingQuota > 0)
+                    // Data limit attributes - ONLY send if SharedUsage is false (per-device quota)
+                    // When SharedUsage is true, quotaForDevice = 0, so no limit is sent
+                    if (quotaForDevice > 0)
                     {
-                        var gigawords = remainingQuota / 4294967296;
-                        var bytes = remainingQuota % 4294967296;
+                        var gigawords = quotaForDevice / 4294967296;
+                        var bytes = quotaForDevice % 4294967296;
 
                         if (gigawords > 0)
                             replyAttributes.Add(("Mikrotik-Total-Limit-Gigawords", ":=", gigawords.ToString()));
@@ -686,6 +755,109 @@ namespace HotelWifiPortal.Services.Radius
             {
                 _logger.LogError(ex, "Error syncing guests to FreeRADIUS");
                 throw; // Re-throw so controller can report error
+            }
+        }
+
+        /// <summary>
+        /// Clear ALL Mikrotik-Total-Limit entries from radreply table
+        /// This forces room-level quota enforcement by the portal instead of per-device by MikroTik
+        /// </summary>
+        public async Task<int> ClearAllQuotaLimitsAsync()
+        {
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+            {
+                _logger.LogWarning("ClearAllQuotaLimitsAsync: FreeRADIUS not enabled");
+                return 0;
+            }
+
+            try
+            {
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Count existing quota limit entries
+                var countSql = $@"SELECT COUNT(*) FROM {_tablePrefix}reply 
+                                  WHERE attribute LIKE 'Mikrotik-Total-Limit%'";
+                using var countCmd = new MySqlCommand(countSql, connection);
+                var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
+
+                if (count > 0)
+                {
+                    // Delete all quota limit entries
+                    var deleteSql = $@"DELETE FROM {_tablePrefix}reply 
+                                       WHERE attribute LIKE 'Mikrotik-Total-Limit%'";
+                    using var deleteCmd = new MySqlCommand(deleteSql, connection);
+                    await deleteCmd.ExecuteNonQueryAsync();
+
+                    _logger.LogInformation("Cleared {Count} Mikrotik-Total-Limit entries from radreply", count);
+                }
+                else
+                {
+                    _logger.LogInformation("No Mikrotik-Total-Limit entries found in radreply");
+                }
+
+                return count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error clearing quota limits from FreeRADIUS");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Get statistics about FreeRADIUS tables
+        /// </summary>
+        public async Task<Dictionary<string, int>> GetTableStatsAsync()
+        {
+            await EnsureConfigLoadedAsync();
+
+            var stats = new Dictionary<string, int>();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+                return stats;
+
+            try
+            {
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var tables = new[] { "check", "reply", "usergroup", "acct", "postauth" };
+                foreach (var table in tables)
+                {
+                    try
+                    {
+                        var sql = $"SELECT COUNT(*) FROM {_tablePrefix}{table}";
+                        using var cmd = new MySqlCommand(sql, connection);
+                        stats[$"{_tablePrefix}{table}"] = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+                    }
+                    catch
+                    {
+                        stats[$"{_tablePrefix}{table}"] = -1; // Table doesn't exist
+                    }
+                }
+
+                // Count quota limit entries specifically
+                try
+                {
+                    var quotaSql = $@"SELECT COUNT(*) FROM {_tablePrefix}reply 
+                                      WHERE attribute LIKE 'Mikrotik-Total-Limit%'";
+                    using var quotaCmd = new MySqlCommand(quotaSql, connection);
+                    stats["quota_limit_entries"] = Convert.ToInt32(await quotaCmd.ExecuteScalarAsync());
+                }
+                catch
+                {
+                    stats["quota_limit_entries"] = -1;
+                }
+
+                return stats;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting FreeRADIUS table stats");
+                return stats;
             }
         }
 

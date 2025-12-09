@@ -472,8 +472,9 @@ namespace HotelWifiPortal.Services.Radius
                 _logger.LogInformation("RADIUS Auth Request: User={User}, MAC={MAC}, NAS={NAS}",
                     username, callingStationId, nasIdentifier);
 
-                // Authenticate user
-                var (success, guest, profile, sessionTimeout, quotaBytes) = await AuthenticateUserAsync(username, password, callingStationId);
+                // Authenticate user - returns calculated download/upload speeds
+                var (success, guest, profile, sessionTimeout, quotaBytes, downloadKbps, uploadKbps) =
+                    await AuthenticateUserAsync(username, password, callingStationId);
 
                 var response = new RadiusPacket
                 {
@@ -494,10 +495,10 @@ namespace HotelWifiPortal.Services.Radius
                     response.AddInt(RadiusAttribute.IdleTimeout, 1800);
 
                     // Apply bandwidth limits via MikroTik-Rate-Limit
-                    // Format: "rx-rate[/tx-rate] [rx-burst-rate/tx-burst-rate] [rx-burst-threshold/tx-burst-threshold] [rx-burst-time/tx-burst-time] [priority] [rx-rate-min/tx-rate-min]"
-                    if (profile != null)
+                    // Format: "rx-rate[/tx-rate]" - uses calculated speeds (with shared bandwidth logic)
+                    if (downloadKbps > 0 && uploadKbps > 0)
                     {
-                        var rateLimit = $"{profile.UploadSpeedKbps}k/{profile.DownloadSpeedKbps}k";
+                        var rateLimit = $"{uploadKbps}k/{downloadKbps}k";
                         response.AddMikroTikAttribute(RadiusAttribute.MikroTikRateLimit, rateLimit);
                     }
 
@@ -531,8 +532,8 @@ namespace HotelWifiPortal.Services.Radius
                         };
                     }
 
-                    _logger.LogInformation("RADIUS Auth Accept: User={User}, MAC={MAC}, Rate={Rate}",
-                        username, callingStationId, profile != null ? $"{profile.DownloadSpeedKbps}k/{profile.UploadSpeedKbps}k" : "unlimited");
+                    _logger.LogInformation("RADIUS Auth Accept: User={User}, MAC={MAC}, Rate={Up}k/{Down}k (shared bandwidth applied)",
+                        username, callingStationId, uploadKbps, downloadKbps);
                 }
                 else
                 {
@@ -613,40 +614,70 @@ namespace HotelWifiPortal.Services.Radius
             }
         }
 
-        private async Task<(bool success, Guest? guest, BandwidthProfile? profile, int sessionTimeout, long quotaBytes)>
+        private async Task<(bool success, Guest? guest, BandwidthProfile? profile, int sessionTimeout, long quotaBytes, int downloadKbps, int uploadKbps)>
             AuthenticateUserAsync(string username, string password, string macAddress)
         {
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+            // Normalize MAC address for checking
+            var normalizedMac = macAddress.ToUpper().Replace("-", ":");
+
+            // CHECK IF MAC IS BLOCKED FIRST
+            var isBlocked = await dbContext.BlockedMacs
+                .AnyAsync(b => b.MacAddress == normalizedMac && b.IsActive);
+
+            if (isBlocked)
+            {
+                _logger.LogWarning("Blocked MAC attempted authentication: {MAC}", macAddress);
+                return (false, null, null, 0, 0, 0, 0);
+            }
 
             // Username format: RoomNumber or RoomNumber@hotel
             var roomNumber = username.Split('@')[0];
 
             // Find guest by room number
             var guest = await dbContext.Guests
-                .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber && g.Status == "checked-in");
+                .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber &&
+                    (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"));
 
             if (guest == null)
             {
                 _logger.LogWarning("Guest not found for room: {Room}", roomNumber);
-                return (false, null, null, 0, 0);
+                return (false, null, null, 0, 0, 0, 0);
             }
 
-            // Verify password (reservation number or local password)
+            // Verify password (WiFi password first, then reservation number)
             bool passwordValid = false;
+
+            // If guest has WiFi password set, ONLY accept WiFi password
             if (!string.IsNullOrEmpty(guest.LocalPassword))
             {
                 passwordValid = guest.LocalPassword == password;
+                if (!passwordValid)
+                {
+                    _logger.LogWarning("Invalid WiFi password for room: {Room}", roomNumber);
+                    return (false, null, null, 0, 0, 0, 0);
+                }
             }
             else
             {
+                // No WiFi password set, accept reservation number
                 passwordValid = guest.ReservationNumber == password;
+                if (!passwordValid)
+                {
+                    _logger.LogWarning("Invalid password for room: {Room}", roomNumber);
+                    return (false, null, null, 0, 0, 0, 0);
+                }
             }
 
-            if (!passwordValid)
+            // CHECK IF QUOTA EXCEEDED
+            if (guest.UsedQuotaBytes >= guest.TotalQuotaBytes && guest.TotalQuotaBytes > 0)
             {
-                _logger.LogWarning("Invalid password for room: {Room}", roomNumber);
-                return (false, null, null, 0, 0);
+                _logger.LogWarning("Quota exceeded for room: {Room}, Used: {Used}MB, Total: {Total}MB",
+                    roomNumber, guest.UsedQuotaBytes / 1048576.0, guest.TotalQuotaBytes / 1048576.0);
+                // Don't reject - let them connect but with limited/no quota
+                // They'll be redirected to paywall
             }
 
             // Get bandwidth profile
@@ -660,10 +691,115 @@ namespace HotelWifiPortal.Services.Radius
             var remainingQuota = guest.TotalQuotaBytes - guest.UsedQuotaBytes;
             if (remainingQuota < 0) remainingQuota = 0;
 
+            // ============================================
+            // CALCULATE BANDWIDTH WITH SHARED LOGIC
+            // ============================================
+            int downloadKbps = profile?.DownloadSpeedKbps ?? 10240; // Default 10 Mbps
+            int uploadKbps = profile?.UploadSpeedKbps ?? 5120; // Default 5 Mbps
+            bool sharedBandwidth = true; // Default to shared
+            bool sharedUsage = true; // Default to shared quota (room-level)
+
+            // Check if guest has an active paid package
+            // Calculate expiry: CompletedAt + DurationHours (or 24 hours default)
+            var activePaidPackage = await dbContext.PaymentTransactions
+                .Where(t => t.GuestId == guest.Id &&
+                           t.Status == "Completed" &&
+                           t.CompletedAt.HasValue &&
+                           t.CompletedAt.Value.AddHours(t.DurationHours ?? 24) > DateTime.UtcNow)
+                .OrderByDescending(t => t.CompletedAt)
+                .Select(t => t.PaidPackageId)
+                .FirstOrDefaultAsync();
+
+            if (activePaidPackage > 0)
+            {
+                // Guest has paid package - use its settings
+                var paidPackage = await dbContext.PaidPackages.FindAsync(activePaidPackage);
+                if (paidPackage != null)
+                {
+                    downloadKbps = paidPackage.DownloadSpeedKbps ?? 20480;  // Default 20 Mbps
+                    uploadKbps = paidPackage.UploadSpeedKbps ?? 10240;      // Default 10 Mbps
+                    sharedBandwidth = paidPackage.SharedBandwidth;
+                    sharedUsage = paidPackage.SharedUsage;
+                    _logger.LogDebug("Using paid package speeds: {Down}k/{Up}k, SharedBandwidth={SB}, SharedUsage={SU}",
+                        downloadKbps, uploadKbps, sharedBandwidth, sharedUsage);
+                }
+            }
+            else
+            {
+                // Check free package based on stay length
+                var stayLength = (guest.DepartureDate - guest.ArrivalDate).Days;
+                var freePackage = await dbContext.BandwidthPackages
+                    .Where(p => p.IsActive && p.MinStayDays <= stayLength)
+                    .OrderByDescending(p => p.MinStayDays)
+                    .FirstOrDefaultAsync();
+
+                if (freePackage != null)
+                {
+                    downloadKbps = freePackage.DownloadSpeedKbps ?? 10240;  // Default 10 Mbps
+                    uploadKbps = freePackage.UploadSpeedKbps ?? 5120;       // Default 5 Mbps
+                    sharedBandwidth = freePackage.SharedBandwidth;
+                    sharedUsage = freePackage.SharedUsage;
+                    _logger.LogDebug("Using free package speeds: {Down}k/{Up}k, SharedBandwidth={SB}, SharedUsage={SU}",
+                        downloadKbps, uploadKbps, sharedBandwidth, sharedUsage);
+                }
+            }
+
+            // ============================================
+            // QUOTA HANDLING FOR SHARED VS PER-DEVICE
+            // ============================================
+            // When SharedUsage = true (room-level quota):
+            //   - Do NOT send Mikrotik-Total-Limit to device
+            //   - Let portal's background service enforce room quota via CoA
+            //   - This ensures all devices are cut off when ROOM total exceeds quota
+            //
+            // When SharedUsage = false (per-device quota):
+            //   - Send Mikrotik-Total-Limit = (TotalQuota / MaxDevices) per device
+            //   - Each device has its own independent quota
+            long quotaForDevice = 0;
+            if (!sharedUsage)
+            {
+                // Per-device quota: divide total by max devices (default 3)
+                int maxDevices = 3; // Could get from package settings
+                quotaForDevice = remainingQuota / maxDevices;
+                _logger.LogDebug("Per-device quota mode: {Quota}MB per device", quotaForDevice / 1048576);
+            }
+            else
+            {
+                // Shared quota: don't send limit to MikroTik, portal will enforce
+                quotaForDevice = 0; // Don't send any limit
+                _logger.LogDebug("Shared quota mode: Room-level quota enforcement by portal");
+            }
+
+            // If SharedBandwidth is enabled, divide by active device count
+            if (sharedBandwidth)
+            {
+                // Count active sessions for this room (excluding the current device which might not be in DB yet)
+                var activeDeviceCount = await dbContext.WifiSessions
+                    .CountAsync(s => s.RoomNumber == roomNumber &&
+                                    (s.Status == "Active" || s.Status == "QuotaExceeded") &&
+                                    s.MacAddress != normalizedMac);
+
+                // Add 1 for the current device
+                activeDeviceCount += 1;
+
+                if (activeDeviceCount > 1)
+                {
+                    downloadKbps = downloadKbps / activeDeviceCount;
+                    uploadKbps = uploadKbps / activeDeviceCount;
+
+                    // Ensure minimum bandwidth (at least 512 Kbps)
+                    if (downloadKbps < 512) downloadKbps = 512;
+                    if (uploadKbps < 256) uploadKbps = 256;
+
+                    _logger.LogInformation("Shared bandwidth: {Devices} devices, per-device rate: {Down}k/{Up}k",
+                        activeDeviceCount, downloadKbps, uploadKbps);
+                }
+            }
+
             // Only UPDATE existing session if found - don't create here
             // Sessions are created by Accounting Start (with RadiusSessionId) or FreeRADIUS sync
             var existingSession = await dbContext.WifiSessions
-                .FirstOrDefaultAsync(s => s.MacAddress == macAddress &&
+                .FirstOrDefaultAsync(s => s.MacAddress == normalizedMac &&
                                           s.RoomNumber == guest.RoomNumber &&
                                           s.Status == "Active");
 
@@ -685,12 +821,14 @@ namespace HotelWifiPortal.Services.Radius
                 Level = "INFO",
                 Category = "RADIUS",
                 Source = "Authentication",
-                Message = $"User authenticated: Room {roomNumber}, MAC {macAddress}",
+                Message = $"User authenticated: Room {roomNumber}, MAC {macAddress}, Rate: {downloadKbps}k/{uploadKbps}k, SharedUsage={sharedUsage}",
                 Timestamp = DateTime.UtcNow
             });
             await dbContext.SaveChangesAsync();
 
-            return (true, guest, profile, sessionTimeout, remainingQuota);
+            // Return quotaForDevice instead of remainingQuota
+            // When SharedUsage=true, quotaForDevice=0, so MikroTik won't enforce per-device limit
+            return (true, guest, profile, sessionTimeout, quotaForDevice, downloadKbps, uploadKbps);
         }
 
         private async Task<BandwidthProfile?> GetBandwidthProfileAsync(ApplicationDbContext dbContext, Guest guest)
@@ -773,6 +911,21 @@ namespace HotelWifiPortal.Services.Radius
 
                 _logger.LogInformation("Accounting Start: Created new session for User={User}, MAC={MAC}, SessionId={Session}",
                     username, macAddress, sessionId);
+
+                // Update bandwidth for all devices in this room (shared bandwidth recalculation)
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // Small delay to ensure session is fully registered
+                        await Task.Delay(500);
+                        await UpdateRoomBandwidthAsync(roomNumber);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error updating room bandwidth after new device connected");
+                    }
+                });
             }
             else
             {
@@ -854,6 +1007,22 @@ namespace HotelWifiPortal.Services.Radius
 
                 _logger.LogInformation("Accounting Stop: User={User}, MAC={MAC}, Time={Time}s, In={In}MB, Out={Out}MB, Cause={Cause}",
                     username, macAddress, sessionTime, inputBytes / 1048576, outputBytes / 1048576, cause);
+
+                // Update bandwidth for remaining devices in this room (shared bandwidth recalculation)
+                var roomNumber = session.RoomNumber;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // Small delay to ensure session status is updated
+                        await Task.Delay(500);
+                        await UpdateRoomBandwidthAsync(roomNumber);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error updating room bandwidth after device disconnected");
+                    }
+                });
             }
 
             // Remove from active sessions
@@ -1164,6 +1333,139 @@ namespace HotelWifiPortal.Services.Radius
                 disconnected, guestId);
 
             return disconnected;
+        }
+
+        /// <summary>
+        /// Recalculate and update bandwidth for all devices in a room based on SharedBandwidth setting
+        /// Call this when a device connects or disconnects to rebalance bandwidth
+        /// </summary>
+        public async Task<int> UpdateRoomBandwidthAsync(string roomNumber)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+            // Get guest for this room
+            var guest = await dbContext.Guests
+                .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber &&
+                    (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"));
+
+            if (guest == null)
+            {
+                _logger.LogWarning("No guest found for room {Room} when updating bandwidth", roomNumber);
+                return 0;
+            }
+
+            // Get all active sessions for this room
+            var activeSessions = await dbContext.WifiSessions
+                .Where(s => s.RoomNumber == roomNumber &&
+                           (s.Status == "Active" || s.Status == "QuotaExceeded"))
+                .ToListAsync();
+
+            if (!activeSessions.Any())
+            {
+                _logger.LogDebug("No active sessions for room {Room}", roomNumber);
+                return 0;
+            }
+
+            // Determine base bandwidth and SharedBandwidth setting
+            int baseDownloadKbps = 10240; // Default 10 Mbps
+            int baseUploadKbps = 5120; // Default 5 Mbps
+            bool sharedBandwidth = true;
+
+            // Check for active paid package first
+            // Calculate expiry: CompletedAt + DurationHours (or 24 hours default)
+            var activePaidPackage = await dbContext.PaymentTransactions
+                .Where(t => t.GuestId == guest.Id &&
+                           t.Status == "Completed" &&
+                           t.CompletedAt.HasValue &&
+                           t.CompletedAt.Value.AddHours(t.DurationHours ?? 24) > DateTime.UtcNow)
+                .OrderByDescending(t => t.CompletedAt)
+                .Select(t => t.PaidPackageId)
+                .FirstOrDefaultAsync();
+
+            if (activePaidPackage > 0)
+            {
+                var paidPackage = await dbContext.PaidPackages.FindAsync(activePaidPackage);
+                if (paidPackage != null)
+                {
+                    baseDownloadKbps = paidPackage.DownloadSpeedKbps ?? 20480;  // Default 20 Mbps
+                    baseUploadKbps = paidPackage.UploadSpeedKbps ?? 10240;      // Default 10 Mbps
+                    sharedBandwidth = paidPackage.SharedBandwidth;
+                }
+            }
+            else
+            {
+                // Check free package based on stay length
+                var stayLength = (guest.DepartureDate - guest.ArrivalDate).Days;
+                var freePackage = await dbContext.BandwidthPackages
+                    .Where(p => p.IsActive && p.MinStayDays <= stayLength)
+                    .OrderByDescending(p => p.MinStayDays)
+                    .FirstOrDefaultAsync();
+
+                if (freePackage != null)
+                {
+                    baseDownloadKbps = freePackage.DownloadSpeedKbps ?? 10240;  // Default 10 Mbps
+                    baseUploadKbps = freePackage.UploadSpeedKbps ?? 5120;       // Default 5 Mbps
+                    sharedBandwidth = freePackage.SharedBandwidth;
+                }
+            }
+
+            // Calculate per-device bandwidth
+            int deviceCount = activeSessions.Count;
+            int downloadKbps = baseDownloadKbps;
+            int uploadKbps = baseUploadKbps;
+
+            if (sharedBandwidth && deviceCount > 1)
+            {
+                downloadKbps = baseDownloadKbps / deviceCount;
+                uploadKbps = baseUploadKbps / deviceCount;
+
+                // Ensure minimum bandwidth
+                if (downloadKbps < 512) downloadKbps = 512;
+                if (uploadKbps < 256) uploadKbps = 256;
+
+                _logger.LogInformation("Room {Room}: Sharing bandwidth among {Count} devices: {Down}k/{Up}k each (base: {BaseDown}k/{BaseUp}k)",
+                    roomNumber, deviceCount, downloadKbps, uploadKbps, baseDownloadKbps, baseUploadKbps);
+            }
+            else
+            {
+                _logger.LogInformation("Room {Room}: Full bandwidth per device: {Down}k/{Up}k (SharedBandwidth={Shared})",
+                    roomNumber, downloadKbps, uploadKbps, sharedBandwidth);
+            }
+
+            // Get NAS IP
+            var wifiSettings = await dbContext.WifiControllerSettings
+                .FirstOrDefaultAsync(w => w.IsEnabled);
+
+            if (wifiSettings == null || string.IsNullOrEmpty(wifiSettings.IpAddress))
+            {
+                _logger.LogWarning("No WiFi controller configured, cannot send CoA");
+                return 0;
+            }
+
+            var nasIp = wifiSettings.IpAddress;
+            int updated = 0;
+
+            // Update each session via CoA
+            foreach (var session in activeSessions)
+            {
+                try
+                {
+                    var success = await UpdateRateLimitAsync(nasIp, session.MacAddress, downloadKbps, uploadKbps);
+                    if (success)
+                    {
+                        updated++;
+                        _logger.LogDebug("Updated bandwidth for MAC {Mac}: {Down}k/{Up}k",
+                            session.MacAddress, downloadKbps, uploadKbps);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error updating bandwidth for MAC {Mac}", session.MacAddress);
+                }
+            }
+
+            return updated;
         }
     }
 

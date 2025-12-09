@@ -105,7 +105,7 @@
                             </button>
                             <button class="btn btn-success" onclick="syncAllUsers()" id="btnSyncUsers">
                                 <i class="bi bi-people me-2"></i>Sync All Guests
-                                <small class="d-block text-light opacity-75">Add checked-in guests to radcheck</small>
+                                <small class="d-block text-light opacity-75">Sync radcheck + radreply (no quota limits)</small>
                             </button>
                             <button class="btn btn-info text-white" onclick="syncBandwidthProfiles()" id="btnSyncProfiles">
                                 <i class="bi bi-speedometer2 me-2"></i>Sync Bandwidth Profiles
@@ -120,12 +120,27 @@
                                 <small class="d-block opacity-75">Remove checked-out guests</small>
                             </button>
                             <hr class="my-2">
+                            <button class="btn btn-outline-info" onclick="clearQuotaLimits()" id="btnClearQuota">
+                                <i class="bi bi-eraser me-2"></i>Clear All Quota Limits
+                                <small class="d-block">Remove Mikrotik-Total-Limit from radreply</small>
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="getTableStats()" id="btnTableStats">
+                                <i class="bi bi-bar-chart me-2"></i>Show Table Stats
+                                <small class="d-block">View row counts in FreeRADIUS tables</small>
+                            </button>
+                            <hr class="my-2">
                             <button class="btn btn-outline-danger" onclick="deleteAllUsers()" id="btnDeleteAll">
                                 <i class="bi bi-trash3 me-2"></i>Delete All RADIUS Users
                                 <small class="d-block">Clear radcheck, radreply, radusergroup</small>
                             </button>
                         </div>
                         <div id="actionResult" class="mt-3"></div>
+                        <div id="tableStats" class="mt-2" style="display:none;">
+                            <h6><i class="bi bi-table me-1"></i>Table Statistics</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody id="tableStatsBody"></tbody>
+                            </table>
+                        </div>
                         <div id="actionLogs" class="mt-2" style="max-height: 200px; overflow-y: auto; font-size: 11px;"></div>
                     </div>
                 </div>
@@ -153,6 +168,34 @@
                             </div>
                         </form>
                         <div id="deleteUserResult" class="mt-2"></div>
+                    </div>
+                </div>
+                
+                <!-- CoA Test Card -->
+                <div class="card mb-3 border-warning">
+                    <div class="card-header bg-warning"><i class="bi bi-plug me-2"></i>Test CoA Disconnect</div>
+                    <div class="card-body">
+                        <div class="mb-2">
+                            <label class="form-label small">MikroTik NAS IP</label>
+                            <input type="text" class="form-control form-control-sm" id="coaNasIp" placeholder="e.g., 10.10.10.2" value="10.10.10.2">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label small">MAC Address</label>
+                            <input type="text" class="form-control form-control-sm" id="coaMac" placeholder="e.g., 6E:F3:B1:07:B0:9F">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label small">Session ID (from radacct)</label>
+                            <input type="text" class="form-control form-control-sm" id="coaSessionId" placeholder="e.g., 804001d4">
+                        </div>
+                        <div class="d-grid gap-1">
+                            <button class="btn btn-warning btn-sm" onclick="testCoA()">
+                                <i class="bi bi-plug me-1"></i>Send Disconnect-Request
+                            </button>
+                            <button class="btn btn-success btn-sm" onclick="forceQuotaCheck()">
+                                <i class="bi bi-speedometer2 me-1"></i>Force Quota Check Now
+                            </button>
+                        </div>
+                        <div id="coaResult" class="mt-2"></div>
                     </div>
                 </div>
                 
@@ -368,6 +411,104 @@ async function syncAccounting() { await doAction('FreeRadiusSyncAccounting','Syn
 async function initializeDatabase() { if(confirm('This will create FreeRADIUS tables (radcheck, radreply, radacct, etc). Continue?')) await doAction('FreeRadiusInitDatabase','Initializing database...', 'btnInitDb'); }
 async function cleanupOldUsers() { if(confirm('Remove all checked-out guests from FreeRADIUS?')) await doAction('FreeRadiusCleanup','Cleaning up...', 'btnCleanup'); }
 async function deleteAllUsers() { if(confirm('⚠️ WARNING: This will DELETE ALL users from FreeRADIUS!\n\nAll entries in radcheck, radreply, and radusergroup will be removed.\n\nAre you absolutely sure?')) await doAction('FreeRadiusDeleteAllUsers','Deleting all users...', 'btnDeleteAll'); }
+
+async function clearQuotaLimits() {
+    if(!confirm('This will remove all Mikrotik-Total-Limit entries from radreply.\n\nThis enables room-level quota enforcement by the portal.\n\nContinue?')) return;
+    const btn = document.getElementById('btnClearQuota');
+    const r = document.getElementById('actionResult');
+    btn.disabled = true;
+    r.innerHTML = '<div class="spinner-border spinner-border-sm"></div> Clearing quota limits...';
+    try {
+        const res = await fetch(`${apiBase}/FreeRadiusClearQuotaLimits`, { method: 'POST' });
+        const data = await res.json();
+        if(data.success) {
+            r.innerHTML = `<div class="alert alert-success py-2 small"><i class="bi bi-check-circle me-1"></i>${data.message}</div>`;
+        } else {
+            r.innerHTML = `<div class="alert alert-danger py-2 small"><i class="bi bi-x-circle me-1"></i>${data.message}</div>`;
+        }
+    } catch(ex) {
+        r.innerHTML = `<div class="alert alert-danger py-2 small">${ex.message}</div>`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function getTableStats() {
+    const btn = document.getElementById('btnTableStats');
+    const statsDiv = document.getElementById('tableStats');
+    const tbody = document.getElementById('tableStatsBody');
+    btn.disabled = true;
+    tbody.innerHTML = '<tr><td colspan="2"><div class="spinner-border spinner-border-sm"></div> Loading...</td></tr>';
+    statsDiv.style.display = 'block';
+    try {
+        const res = await fetch(`${apiBase}/FreeRadiusTableStats`);
+        const data = await res.json();
+        if(data.success) {
+            let html = '';
+            for(const [table, count] of Object.entries(data.stats)) {
+                const badge = table === 'quota_limit_entries' ? 
+                    (count > 0 ? 'bg-warning' : 'bg-success') : 'bg-secondary';
+                const icon = count === -1 ? '❌' : '';
+                html += `<tr><td>${table}</td><td><span class="badge ${badge}">${count === -1 ? 'N/A' : count}</span> ${icon}</td></tr>`;
+            }
+            tbody.innerHTML = html;
+        } else {
+            tbody.innerHTML = `<tr><td colspan="2" class="text-danger">${data.message}</td></tr>`;
+        }
+    } catch(ex) {
+        tbody.innerHTML = `<tr><td colspan="2" class="text-danger">${ex.message}</td></tr>`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function testCoA() {
+    const nasIp = document.getElementById('coaNasIp').value;
+    const mac = document.getElementById('coaMac').value;
+    const sessionId = document.getElementById('coaSessionId').value;
+    const r = document.getElementById('coaResult');
+    
+    if(!nasIp) { r.innerHTML='<div class="alert alert-warning py-1 small">Enter NAS IP</div>'; return; }
+    
+    r.innerHTML='<div class="spinner-border spinner-border-sm"></div> Sending CoA...';
+    try {
+        const res = await fetch(`${apiBase}/FreeRadiusTestCoA`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ nasIp, macAddress: mac, sessionId })
+        });
+        const data = await res.json();
+        const alertClass = data.success ? 'alert-success' : 'alert-danger';
+        let html = `<div class="alert ${alertClass} py-1 small">${data.message}</div>`;
+        if(data.logs) {
+            html += '<ul class="small mb-0">';
+            data.logs.forEach(log => html += `<li>${log}</li>`);
+            html += '</ul>';
+        }
+        r.innerHTML = html;
+    } catch(ex) {
+        r.innerHTML = `<div class="alert alert-danger py-1 small">${ex.message}</div>`;
+    }
+}
+
+async function forceQuotaCheck() {
+    const r = document.getElementById('coaResult');
+    r.innerHTML='<div class="spinner-border spinner-border-sm"></div> Running quota check...';
+    try {
+        const res = await fetch(`${apiBase}/FreeRadiusForceQuotaCheck`, { method: 'POST' });
+        const data = await res.json();
+        const alertClass = data.success ? 'alert-success' : 'alert-danger';
+        let html = `<div class="alert ${alertClass} py-1 small">${data.message}</div>`;
+        if(data.logs) {
+            html += '<ul class="small mb-0">';
+            data.logs.forEach(log => html += `<li>${log}</li>`);
+            html += '</ul>';
+        }
+        r.innerHTML = html;
+    } catch(ex) {
+        r.innerHTML = `<div class="alert alert-danger py-1 small">${ex.message}</div>`;
+    }
+}
 
 async function deleteUser(e) {
     e.preventDefault();

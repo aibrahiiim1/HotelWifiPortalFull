@@ -2117,6 +2117,133 @@ namespace HotelWifiPortal.Controllers.Admin
         }
 
         /// <summary>
+        /// Clear all Mikrotik-Total-Limit entries from radreply
+        /// This enables room-level quota enforcement by the portal
+        /// </summary>
+        [HttpPost]
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> FreeRadiusClearQuotaLimits()
+        {
+            try
+            {
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
+
+                var count = await freeRadiusService.ClearAllQuotaLimitsAsync();
+
+                return Json(new
+                {
+                    success = true,
+                    message = count > 0
+                        ? $"Cleared {count} Mikrotik-Total-Limit entries. Room-level quota will now be enforced by the portal."
+                        : "No quota limit entries found in radreply.",
+                    clearedCount = count
+                });
+            }
+            catch (Exception ex)
+            {
+                return Json(new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get FreeRADIUS table statistics
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> FreeRadiusTableStats()
+        {
+            try
+            {
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var freeRadiusService = scope.ServiceProvider.GetRequiredService<FreeRadiusService>();
+
+                var stats = await freeRadiusService.GetTableStatsAsync();
+
+                return Json(new { success = true, stats });
+            }
+            catch (Exception ex)
+            {
+                return Json(new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Test CoA (Disconnect) to a specific session
+        /// </summary>
+        [HttpPost]
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> FreeRadiusTestCoA([FromBody] TestCoARequest request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(request?.NasIp))
+                {
+                    return Json(new { success = false, message = "NAS IP is required" });
+                }
+
+                var logs = new List<string>();
+                logs.Add($"Testing CoA Disconnect to NAS: {request.NasIp}");
+                logs.Add($"MAC: {request.MacAddress ?? "Not specified"}");
+                logs.Add($"Session ID: {request.SessionId ?? "Not specified"}");
+
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var radiusServer = scope.ServiceProvider.GetRequiredService<RadiusServer>();
+
+                var result = await radiusServer.DisconnectUserAsync(
+                    request.NasIp,
+                    request.MacAddress ?? "",
+                    request.SessionId ?? "");
+
+                logs.Add($"CoA Result: {(result ? "SUCCESS (Disconnect-ACK received)" : "FAILED (Timeout or NAK)")}");
+
+                return Json(new
+                {
+                    success = result,
+                    message = result ? "Disconnect successful!" : "Disconnect failed - check logs for details",
+                    logs
+                });
+            }
+            catch (Exception ex)
+            {
+                return Json(new { success = false, message = ex.Message });
+            }
+        }
+
+        public class TestCoARequest
+        {
+            public string? NasIp { get; set; }
+            public string? MacAddress { get; set; }
+            public string? SessionId { get; set; }
+        }
+
+        /// <summary>
+        /// Force check quota and disconnect exceeded sessions
+        /// </summary>
+        [HttpPost]
+        [IgnoreAntiforgeryToken]
+        public async Task<IActionResult> FreeRadiusForceQuotaCheck()
+        {
+            try
+            {
+                var logs = new List<string>();
+                logs.Add("=== Starting Manual Quota Check ===");
+
+                using var scope = HttpContext.RequestServices.CreateScope();
+                var wifiService = scope.ServiceProvider.GetRequiredService<WifiService>();
+
+                logs.Add("Calling CheckQuotaExceededAsync...");
+                await wifiService.CheckQuotaExceededAsync();
+                logs.Add("Quota check completed - check server logs for details");
+
+                return Json(new { success = true, message = "Quota check completed", logs });
+            }
+            catch (Exception ex)
+            {
+                return Json(new { success = false, message = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// Reset guest usage in portal and optionally FreeRADIUS
         /// </summary>
         [HttpPost]

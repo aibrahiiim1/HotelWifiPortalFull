@@ -1,6 +1,7 @@
 using HotelWifiPortal.Data;
 using HotelWifiPortal.Models.Entities;
 using HotelWifiPortal.Models.ViewModels;
+using HotelWifiPortal.Services.Radius;
 using HotelWifiPortal.Services.WiFi;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -234,9 +235,34 @@ namespace HotelWifiPortal.Controllers.Admin
         {
             var session = await _dbContext.WifiSessions.FindAsync(id);
             if (session == null) return NotFound();
-            await _wifiService.DisconnectSessionAsync(id);
-            _logger.LogInformation("Session disconnected: MAC {Mac}, Room {Room}", session.MacAddress, session.RoomNumber);
-            TempData["Success"] = "Session disconnected successfully.";
+
+            var macAddress = session.MacAddress?.ToUpper();
+            if (string.IsNullOrEmpty(macAddress))
+            {
+                TempData["Error"] = "No MAC address found for this session.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            try
+            {
+                // Disconnect from network via CoA and MikroTik API
+                await DisconnectMacFromNetwork(macAddress, session.RadiusSessionId);
+
+                // Update session in database
+                session.Status = "Disconnected";
+                session.SessionEnd = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Session disconnected: MAC {Mac}, Room {Room} by {User}",
+                    macAddress, session.RoomNumber, User.Identity?.Name);
+                TempData["Success"] = $"Session for MAC {macAddress} disconnected successfully.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error disconnecting session {Id}", id);
+                TempData["Error"] = $"Error disconnecting: {ex.Message}";
+            }
+
             return RedirectToAction(nameof(Index));
         }
 
@@ -245,15 +271,283 @@ namespace HotelWifiPortal.Controllers.Admin
         [Authorize(Roles = "Admin,SuperAdmin,Manager")]
         public async Task<IActionResult> Block(int id)
         {
-            var session = await _dbContext.WifiSessions.FindAsync(id);
+            var session = await _dbContext.WifiSessions
+                .Include(s => s.Guest)
+                .FirstOrDefaultAsync(s => s.Id == id);
             if (session == null) return NotFound();
-            var controller = _wifiService.GetController(session.ControllerType);
-            if (controller != null) await controller.BlockClientAsync(session.MacAddress);
-            session.Status = "Blocked";
-            session.SessionEnd = DateTime.UtcNow;
-            await _dbContext.SaveChangesAsync();
-            TempData["Success"] = "Client blocked successfully.";
+
+            var macAddress = session.MacAddress?.ToUpper();
+            if (string.IsNullOrEmpty(macAddress))
+            {
+                TempData["Error"] = "No MAC address found for this session.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            try
+            {
+                // 1. First disconnect the user via CoA
+                await DisconnectMacFromNetwork(macAddress, session.RadiusSessionId);
+
+                // 2. Add to BlockedMacs table
+                var existingBlock = await _dbContext.BlockedMacs
+                    .FirstOrDefaultAsync(b => b.MacAddress == macAddress && b.IsActive);
+
+                if (existingBlock == null)
+                {
+                    var blockedMac = new BlockedMac
+                    {
+                        MacAddress = macAddress,
+                        Reason = "Blocked from session management",
+                        BlockedBy = User.Identity?.Name ?? "System",
+                        RoomNumber = session.RoomNumber,
+                        GuestName = session.GuestName ?? session.Guest?.GuestName,
+                        BlockedAt = DateTime.UtcNow,
+                        IsActive = true
+                    };
+                    _dbContext.BlockedMacs.Add(blockedMac);
+                }
+
+                // 3. Add to FreeRADIUS radcheck with Auth-Type := Reject
+                await AddToFreeRadiusBlockList(macAddress);
+
+                // 4. Update session status
+                session.Status = "Blocked";
+                session.SessionEnd = DateTime.UtcNow;
+
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Blocked MAC {Mac} by {User}", macAddress, User.Identity?.Name);
+                TempData["Success"] = $"MAC {macAddress} blocked successfully.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error blocking MAC {Mac}", macAddress);
+                TempData["Error"] = $"Error blocking MAC: {ex.Message}";
+            }
+
             return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin,Manager")]
+        public async Task<IActionResult> Unblock(int id)
+        {
+            var blockedMac = await _dbContext.BlockedMacs.FindAsync(id);
+            if (blockedMac == null) return NotFound();
+
+            try
+            {
+                // Remove from FreeRADIUS block list
+                await RemoveFromFreeRadiusBlockList(blockedMac.MacAddress);
+
+                // Update BlockedMacs record
+                blockedMac.IsActive = false;
+                blockedMac.UnblockedAt = DateTime.UtcNow;
+                blockedMac.UnblockedBy = User.Identity?.Name ?? "System";
+
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Unblocked MAC {Mac} by {User}", blockedMac.MacAddress, User.Identity?.Name);
+                TempData["Success"] = $"MAC {blockedMac.MacAddress} unblocked successfully.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error unblocking MAC {Mac}", blockedMac.MacAddress);
+                TempData["Error"] = $"Error unblocking MAC: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(BlockedMacs));
+        }
+
+        // Blocked MACs management page
+        public async Task<IActionResult> BlockedMacs()
+        {
+            var blockedMacs = await _dbContext.BlockedMacs
+                .OrderByDescending(b => b.BlockedAt)
+                .ToListAsync();
+
+            return View(blockedMacs);
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin,Manager")]
+        public async Task<IActionResult> AddBlockedMac(string macAddress, string? reason)
+        {
+            if (string.IsNullOrWhiteSpace(macAddress))
+            {
+                TempData["Error"] = "MAC address is required.";
+                return RedirectToAction(nameof(BlockedMacs));
+            }
+
+            // Normalize MAC address
+            macAddress = macAddress.ToUpper().Replace("-", ":").Trim();
+
+            // Check if already blocked
+            var existing = await _dbContext.BlockedMacs
+                .FirstOrDefaultAsync(b => b.MacAddress == macAddress && b.IsActive);
+
+            if (existing != null)
+            {
+                TempData["Error"] = $"MAC {macAddress} is already blocked.";
+                return RedirectToAction(nameof(BlockedMacs));
+            }
+
+            try
+            {
+                // Disconnect if currently connected
+                await DisconnectMacFromNetwork(macAddress, null);
+
+                // Add to database
+                var blockedMac = new BlockedMac
+                {
+                    MacAddress = macAddress,
+                    Reason = reason ?? "Manually blocked",
+                    BlockedBy = User.Identity?.Name ?? "System",
+                    BlockedAt = DateTime.UtcNow,
+                    IsActive = true
+                };
+                _dbContext.BlockedMacs.Add(blockedMac);
+
+                // Add to FreeRADIUS
+                await AddToFreeRadiusBlockList(macAddress);
+
+                await _dbContext.SaveChangesAsync();
+
+                TempData["Success"] = $"MAC {macAddress} blocked successfully.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error adding blocked MAC {Mac}", macAddress);
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(BlockedMacs));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin")]
+        public async Task<IActionResult> DeleteBlockedMac(int id)
+        {
+            var blockedMac = await _dbContext.BlockedMacs.FindAsync(id);
+            if (blockedMac == null) return NotFound();
+
+            try
+            {
+                // Remove from FreeRADIUS
+                await RemoveFromFreeRadiusBlockList(blockedMac.MacAddress);
+
+                // Delete from database
+                _dbContext.BlockedMacs.Remove(blockedMac);
+                await _dbContext.SaveChangesAsync();
+
+                TempData["Success"] = $"Blocked MAC {blockedMac.MacAddress} deleted.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting blocked MAC {Mac}", blockedMac.MacAddress);
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+
+            return RedirectToAction(nameof(BlockedMacs));
+        }
+
+        // Helper: Disconnect MAC from network via CoA
+        private async Task DisconnectMacFromNetwork(string macAddress, string? radiusSessionId)
+        {
+            var settings = await _dbContext.SystemSettings.ToListAsync();
+            var mikrotikIp = settings.FirstOrDefault(s => s.Key == "MikrotikIpAddress")?.Value;
+
+            // Try to get MikroTik IP from WifiControllerSettings if not in SystemSettings
+            if (string.IsNullOrEmpty(mikrotikIp))
+            {
+                var wifiSettings = await _dbContext.WifiControllerSettings
+                    .FirstOrDefaultAsync(w => w.ControllerType == "Mikrotik" && w.IsEnabled);
+                mikrotikIp = wifiSettings?.IpAddress;
+            }
+
+            if (!string.IsNullOrEmpty(mikrotikIp))
+            {
+                // Use CoA to disconnect
+                var radiusServer = HttpContext.RequestServices.GetService<RadiusServer>();
+                if (radiusServer != null)
+                {
+                    await radiusServer.DisconnectUserAsync(mikrotikIp, macAddress, radiusSessionId ?? "");
+                    _logger.LogInformation("Sent CoA disconnect for MAC {Mac}", macAddress);
+                }
+            }
+
+            // Also try MikroTik REST API
+            var controller = _wifiService.GetController("Mikrotik");
+            if (controller != null)
+            {
+                await controller.DisconnectUserAsync(macAddress);
+            }
+        }
+
+        // Helper: Add MAC to FreeRADIUS block list
+        private async Task AddToFreeRadiusBlockList(string macAddress)
+        {
+            var settings = await _dbContext.SystemSettings.ToListAsync();
+            var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
+            var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+            var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+            if (enabled?.ToLower() != "true" || string.IsNullOrEmpty(connStr))
+            {
+                _logger.LogDebug("FreeRADIUS not enabled, skipping block list update");
+                return;
+            }
+
+            // Format MAC for FreeRADIUS (uppercase with colons or dashes based on your setup)
+            var formattedMac = macAddress.ToUpper();
+
+            using var connection = new MySqlConnection(connStr);
+            await connection.OpenAsync();
+
+            // Delete any existing entries for this MAC
+            var deleteSql = $"DELETE FROM {prefix}check WHERE username = @mac AND attribute = 'Auth-Type'";
+            using var deleteCmd = new MySqlCommand(deleteSql, connection);
+            deleteCmd.Parameters.AddWithValue("@mac", formattedMac);
+            await deleteCmd.ExecuteNonQueryAsync();
+
+            // Insert Auth-Type := Reject to block this MAC
+            var insertSql = $@"INSERT INTO {prefix}check (username, attribute, op, value) 
+                               VALUES (@mac, 'Auth-Type', ':=', 'Reject')";
+            using var insertCmd = new MySqlCommand(insertSql, connection);
+            insertCmd.Parameters.AddWithValue("@mac", formattedMac);
+            await insertCmd.ExecuteNonQueryAsync();
+
+            _logger.LogInformation("Added MAC {Mac} to FreeRADIUS block list", formattedMac);
+        }
+
+        // Helper: Remove MAC from FreeRADIUS block list
+        private async Task RemoveFromFreeRadiusBlockList(string macAddress)
+        {
+            var settings = await _dbContext.SystemSettings.ToListAsync();
+            var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
+            var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+            var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+            if (enabled?.ToLower() != "true" || string.IsNullOrEmpty(connStr))
+            {
+                return;
+            }
+
+            var formattedMac = macAddress.ToUpper();
+
+            using var connection = new MySqlConnection(connStr);
+            await connection.OpenAsync();
+
+            // Delete the Auth-Type := Reject entry
+            var sql = $"DELETE FROM {prefix}check WHERE username = @mac AND attribute = 'Auth-Type' AND value = 'Reject'";
+            using var cmd = new MySqlCommand(sql, connection);
+            cmd.Parameters.AddWithValue("@mac", formattedMac);
+            await cmd.ExecuteNonQueryAsync();
+
+            _logger.LogInformation("Removed MAC {Mac} from FreeRADIUS block list", formattedMac);
         }
 
         [HttpPost]

@@ -37,9 +37,16 @@ namespace HotelWifiPortal.Data
         public DbSet<AdminUser> AdminUsers { get; set; }
         public DbSet<LocalUser> LocalUsers { get; set; }
 
+        // Blocked MACs
+        public DbSet<BlockedMac> BlockedMacs { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            // BlockedMac indexes
+            modelBuilder.Entity<BlockedMac>()
+                .HasIndex(b => b.MacAddress);
 
             // Guest indexes
             modelBuilder.Entity<Guest>()
@@ -102,7 +109,7 @@ namespace HotelWifiPortal.Data
                     Description = "For stays less than 7 days",
                     MinStayDays = 0,
                     MaxStayDays = 6,
-                    QuotaGB = 1,
+                    QuotaGB = 3,
                     BadgeColor = "primary",
                     Icon = "bi-clock",
                     SortOrder = 1,

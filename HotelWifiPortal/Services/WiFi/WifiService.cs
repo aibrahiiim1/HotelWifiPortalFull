@@ -1,5 +1,6 @@
 using HotelWifiPortal.Data;
 using HotelWifiPortal.Models.Entities;
+using HotelWifiPortal.Services.Radius;
 using Microsoft.EntityFrameworkCore;
 
 namespace HotelWifiPortal.Services.WiFi
@@ -35,13 +36,16 @@ namespace HotelWifiPortal.Services.WiFi
         private readonly ApplicationDbContext _dbContext;
         private readonly WifiControllerFactory _controllerFactory;
         private readonly ILogger<WifiService> _logger;
+        private readonly IServiceProvider _serviceProvider;
         private readonly Dictionary<string, IWifiController> _controllers = new();
 
-        public WifiService(ApplicationDbContext dbContext, WifiControllerFactory controllerFactory, ILogger<WifiService> logger)
+        public WifiService(ApplicationDbContext dbContext, WifiControllerFactory controllerFactory,
+            ILogger<WifiService> logger, IServiceProvider serviceProvider)
         {
             _dbContext = dbContext;
             _controllerFactory = controllerFactory;
             _logger = logger;
+            _serviceProvider = serviceProvider;
         }
 
         public async Task InitializeControllersAsync()
@@ -690,23 +694,263 @@ namespace HotelWifiPortal.Services.WiFi
         public async Task CheckQuotaExceededAsync()
         {
             var controller = await GetDefaultControllerAsync();
-            if (controller == null) return;
 
+            // Get MikroTik IP for CoA disconnect
+            var mikrotikIpSetting = await _dbContext.SystemSettings
+                .FirstOrDefaultAsync(s => s.Key == "MikroTikHotspotIp");
+            var mikrotikIp = mikrotikIpSetting?.Value ?? "";
+
+            // Check if FreeRADIUS is enabled - if so, query radacct directly
+            var freeRadiusEnabled = await _dbContext.SystemSettings
+                .Where(s => s.Key == "FreeRadiusEnabled")
+                .Select(s => s.Value)
+                .FirstOrDefaultAsync();
+
+            if (freeRadiusEnabled?.ToLower() == "true")
+            {
+                // Use FreeRADIUS radacct for accurate usage data
+                await CheckQuotaFromFreeRadiusAsync(mikrotikIp, controller);
+            }
+            else
+            {
+                // Fallback to portal database
+                await CheckQuotaFromPortalAsync(mikrotikIp, controller);
+            }
+        }
+
+        /// <summary>
+        /// Check quota by querying FreeRADIUS radacct directly - more accurate!
+        /// </summary>
+        private async Task CheckQuotaFromFreeRadiusAsync(string mikrotikIp, IWifiController? controller)
+        {
+            try
+            {
+                var connectionString = await _dbContext.SystemSettings
+                    .Where(s => s.Key == "FreeRadiusConnectionString")
+                    .Select(s => s.Value)
+                    .FirstOrDefaultAsync();
+
+                if (string.IsNullOrEmpty(connectionString))
+                {
+                    _logger.LogWarning("FreeRADIUS connection string empty, falling back to portal check");
+                    await CheckQuotaFromPortalAsync(mikrotikIp, controller);
+                    return;
+                }
+
+                var tablePrefix = await _dbContext.SystemSettings
+                    .Where(s => s.Key == "FreeRadiusTablePrefix")
+                    .Select(s => s.Value)
+                    .FirstOrDefaultAsync() ?? "rad";
+
+                using var connection = new MySqlConnector.MySqlConnection(connectionString);
+                await connection.OpenAsync();
+
+                // Get all checked-in guests with quota limits
+                var guests = await _dbContext.Guests
+                    .Where(g => (g.Status.ToLower() == "checked-in" ||
+                                g.Status.ToLower() == "checkedin" ||
+                                g.Status == "CheckedIn") &&
+                               (g.FreeQuotaBytes + g.PaidQuotaBytes) > 0)
+                    .ToListAsync();
+
+                _logger.LogDebug("Checking quota for {Count} guests with quota limits", guests.Count);
+
+                foreach (var guest in guests)
+                {
+                    try
+                    {
+                        // Query radacct for TOTAL room usage (sum of all devices)
+                        var usageSql = $@"
+                            SELECT 
+                                COALESCE(SUM(acctinputoctets), 0) + COALESCE(SUM(acctoutputoctets), 0) as total_bytes
+                            FROM {tablePrefix}acct 
+                            WHERE username = @username";
+
+                        using var usageCmd = new MySqlConnector.MySqlCommand(usageSql, connection);
+                        usageCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                        var totalBytes = Convert.ToInt64(await usageCmd.ExecuteScalarAsync() ?? 0L);
+
+                        var quotaBytes = guest.FreeQuotaBytes + guest.PaidQuotaBytes;
+                        var usedMB = totalBytes / 1048576.0;
+                        var quotaMB = quotaBytes / 1048576.0;
+
+                        // Update guest's UsedQuotaBytes if higher
+                        if (totalBytes > guest.UsedQuotaBytes)
+                        {
+                            guest.UsedQuotaBytes = totalBytes;
+                            _dbContext.Entry(guest).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
+                        }
+
+                        // Check if quota exceeded
+                        if (totalBytes >= quotaBytes)
+                        {
+                            _logger.LogWarning("=== ROOM {Room} EXCEEDED QUOTA: {Used:F2}MB / {Quota:F2}MB ===",
+                                guest.RoomNumber, usedMB, quotaMB);
+
+                            // Get ALL active sessions from radacct for this room (including NAS IP for CoA)
+                            var sessionSql = $@"
+                                SELECT acctsessionid, callingstationid, framedipaddress, nasipaddress
+                                FROM {tablePrefix}acct 
+                                WHERE username = @username AND acctstoptime IS NULL";
+
+                            using var sessionCmd = new MySqlConnector.MySqlCommand(sessionSql, connection);
+                            sessionCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+
+                            var sessionsToDisconnect = new List<(string sessionId, string mac, string ip, string nasIp)>();
+                            using var reader = await sessionCmd.ExecuteReaderAsync();
+                            while (await reader.ReadAsync())
+                            {
+                                var sessionId = reader.GetString(0);
+                                var mac = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                                var ip = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                                var nasIp = reader.IsDBNull(3) ? "" : reader.GetString(3);
+                                sessionsToDisconnect.Add((sessionId, mac, ip, nasIp));
+                            }
+
+                            _logger.LogInformation("Found {Count} active sessions in radacct for Room {Room} to disconnect",
+                                sessionsToDisconnect.Count, guest.RoomNumber);
+
+                            // Disconnect each device via CoA
+                            foreach (var (sessionId, mac, ip, nasIpFromRadacct) in sessionsToDisconnect)
+                            {
+                                try
+                                {
+                                    // Use NAS IP from radacct if available, otherwise use configured MikroTik IP
+                                    var targetNasIp = !string.IsNullOrEmpty(nasIpFromRadacct) ? nasIpFromRadacct : mikrotikIp;
+
+                                    _logger.LogWarning("=== DISCONNECTING DEVICE ===");
+                                    _logger.LogWarning("Room={Room}, MAC={Mac}, SessionId={SessionId}, NAS_IP={NasIp}",
+                                        guest.RoomNumber, mac, sessionId, targetNasIp);
+
+                                    // RADIUS CoA Disconnect
+                                    if (!string.IsNullOrEmpty(targetNasIp) && !string.IsNullOrEmpty(sessionId))
+                                    {
+                                        var radiusServer = _serviceProvider.GetService<RadiusServer>();
+                                        if (radiusServer != null)
+                                        {
+                                            var disconnected = await radiusServer.DisconnectUserAsync(
+                                                targetNasIp, mac, sessionId);
+                                            _logger.LogWarning("CoA Disconnect for {Mac} to {NasIp}: {Result}",
+                                                mac, targetNasIp, disconnected ? "SUCCESS" : "FAILED");
+                                        }
+                                        else
+                                        {
+                                            _logger.LogError("RadiusServer service not available for CoA!");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        _logger.LogError("Cannot send CoA: NAS_IP={NasIp}, SessionId={SessionId}",
+                                            targetNasIp, sessionId);
+                                    }
+
+                                    // Also try MikroTik REST API
+                                    if (controller != null && !string.IsNullOrEmpty(mac))
+                                    {
+                                        await controller.DisconnectUserAsync(mac);
+                                    }
+
+                                    // Update portal session if exists
+                                    var portalSession = await _dbContext.WifiSessions
+                                        .FirstOrDefaultAsync(s => s.MacAddress == mac && s.Status == "Active");
+                                    if (portalSession != null)
+                                    {
+                                        portalSession.Status = "QuotaExceeded";
+                                        portalSession.SessionEnd = DateTime.UtcNow;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "Error disconnecting {Mac}", mac);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error checking quota for Room {Room}", guest.RoomNumber);
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in CheckQuotaFromFreeRadiusAsync");
+                // Fallback to portal-based check
+                await CheckQuotaFromPortalAsync(mikrotikIp, controller);
+            }
+        }
+
+        /// <summary>
+        /// Fallback: Check quota using portal database only
+        /// </summary>
+        private async Task CheckQuotaFromPortalAsync(string mikrotikIp, IWifiController? controller)
+        {
             var guestsOverQuota = await _dbContext.Guests
-                .Where(g => g.Status == "checked-in" && g.UsedQuotaBytes >= (g.FreeQuotaBytes + g.PaidQuotaBytes))
+                .Where(g => (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn") &&
+                            g.UsedQuotaBytes >= (g.FreeQuotaBytes + g.PaidQuotaBytes) &&
+                            (g.FreeQuotaBytes + g.PaidQuotaBytes) > 0)
                 .ToListAsync();
 
             foreach (var guest in guestsOverQuota)
             {
+                // Mark ALL sessions for this guest by BOTH GuestId AND RoomNumber
+                // This ensures we catch sessions that might have GuestId=0 but correct RoomNumber
                 var sessions = await _dbContext.WifiSessions
-                    .Where(s => s.GuestId == guest.Id && s.Status == "Active")
+                    .Where(s => (s.GuestId == guest.Id || s.RoomNumber == guest.RoomNumber) &&
+                                s.Status == "Active")
                     .ToListAsync();
+
+                if (sessions.Any())
+                {
+                    _logger.LogWarning("=== ROOM {Room} EXCEEDED QUOTA: {Used}MB / {Total}MB ===",
+                        guest.RoomNumber, guest.UsedQuotaBytes / 1048576.0, guest.TotalQuotaBytes / 1048576.0);
+                    _logger.LogInformation("Disconnecting {Count} active sessions for Room {Room}",
+                        sessions.Count, guest.RoomNumber);
+                }
 
                 foreach (var session in sessions)
                 {
-                    // Block or limit the client
-                    await controller.SetBandwidthLimitAsync(session.MacAddress, 64, 64); // Very low speed
+                    try
+                    {
+                        // DISCONNECT the device via RADIUS CoA (not just throttle)
+                        if (!string.IsNullOrEmpty(mikrotikIp) && !string.IsNullOrEmpty(session.RadiusSessionId))
+                        {
+                            var radiusServer = _serviceProvider.GetService<RadiusServer>();
+                            if (radiusServer != null)
+                            {
+                                var disconnected = await radiusServer.DisconnectUserAsync(
+                                    mikrotikIp, session.MacAddress, session.RadiusSessionId);
+
+                                _logger.LogInformation("CoA Disconnect for {Mac}: {Result}",
+                                    session.MacAddress, disconnected ? "Success" : "Failed");
+                            }
+                        }
+
+                        // Also try MikroTik REST API to remove hotspot user
+                        if (controller != null)
+                        {
+                            await controller.DisconnectUserAsync(session.MacAddress);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error disconnecting {Mac}", session.MacAddress);
+                    }
+
+                    // Mark session as QuotaExceeded
                     session.Status = "QuotaExceeded";
+                    session.SessionEnd = DateTime.UtcNow;
+
+                    // Ensure GuestId is set correctly
+                    if (session.GuestId != guest.Id)
+                    {
+                        session.GuestId = guest.Id;
+                    }
+
+                    _logger.LogInformation("Marked session {Mac} as QuotaExceeded for Room {Room}",
+                        session.MacAddress, guest.RoomNumber);
                 }
             }
 
