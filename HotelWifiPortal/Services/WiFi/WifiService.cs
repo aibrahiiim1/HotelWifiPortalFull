@@ -450,9 +450,7 @@ namespace HotelWifiPortal.Services.WiFi
                         acctstarttime,
                         framedipaddress,
                         COALESCE(acctinputoctets, 0) as acctinputoctets,
-                        COALESCE(acctoutputoctets, 0) as acctoutputoctets,
-                        COALESCE(acctinputgigawords, 0) as acctinputgigawords,
-                        COALESCE(acctoutputgigawords, 0) as acctoutputgigawords
+                        COALESCE(acctoutputoctets, 0) as acctoutputoctets
                     FROM {tablePrefix}acct 
                     WHERE acctstoptime IS NULL
                     ORDER BY acctstarttime DESC";
@@ -468,8 +466,8 @@ namespace HotelWifiPortal.Services.WiFi
                     var sessionId = reader.IsDBNull(2) ? "" : reader.GetString(2);
                     var start = reader.IsDBNull(3) ? DateTime.UtcNow : reader.GetDateTime(3);
                     var ip = reader.IsDBNull(4) ? "" : reader.GetString(4);
-                    var bytesIn = reader.GetInt64(5) + (reader.GetInt64(7) * 4294967296);
-                    var bytesOut = reader.GetInt64(6) + (reader.GetInt64(8) * 4294967296);
+                    var bytesIn = reader.GetInt64(5);
+                    var bytesOut = reader.GetInt64(6);
 
                     newSessions.Add((username, mac, sessionId, start, ip, bytesIn, bytesOut));
                 }
@@ -558,10 +556,89 @@ namespace HotelWifiPortal.Services.WiFi
                 }
 
                 await _dbContext.SaveChangesAsync();
+
+                // Also mark sessions as disconnected if they're no longer active in FreeRADIUS
+                await MarkDisconnectedSessionsAsync(connection, tablePrefix);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error creating missing sessions from FreeRADIUS");
+            }
+        }
+
+        /// <summary>
+        /// Mark sessions as disconnected if they have ended in FreeRADIUS (acctstoptime is set)
+        /// </summary>
+        private async Task MarkDisconnectedSessionsAsync(MySqlConnector.MySqlConnection connection, string tablePrefix)
+        {
+            try
+            {
+                // Get all our "Active" sessions that have a RadiusSessionId
+                var activeSessions = await _dbContext.WifiSessions
+                    .Where(s => s.Status == "Active" && !string.IsNullOrEmpty(s.RadiusSessionId))
+                    .ToListAsync();
+
+                if (!activeSessions.Any())
+                {
+                    return;
+                }
+
+                // Build a query to check which sessions have ended in FreeRADIUS
+                var sessionIds = activeSessions.Select(s => s.RadiusSessionId).ToList();
+                var placeholders = string.Join(",", sessionIds.Select((_, i) => $"@sid{i}"));
+
+                var sql = $@"
+                    SELECT acctsessionid, acctstoptime, 
+                           COALESCE(acctinputoctets, 0) as bytes_in,
+                           COALESCE(acctoutputoctets, 0) as bytes_out
+                    FROM {tablePrefix}acct 
+                    WHERE acctsessionid IN ({placeholders})
+                      AND acctstoptime IS NOT NULL";
+
+                using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
+                for (int i = 0; i < sessionIds.Count; i++)
+                {
+                    cmd.Parameters.AddWithValue($"@sid{i}", sessionIds[i]);
+                }
+
+                var endedSessions = new Dictionary<string, (DateTime stopTime, long bytesIn, long bytesOut)>();
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var sid = reader.GetString(0);
+                    var stopTime = reader.GetDateTime(1);
+                    var bytesIn = reader.GetInt64(2);
+                    var bytesOut = reader.GetInt64(3);
+                    endedSessions[sid] = (stopTime, bytesIn, bytesOut);
+                }
+                await reader.CloseAsync();
+
+                // Mark sessions as disconnected
+                int markedCount = 0;
+                foreach (var session in activeSessions)
+                {
+                    if (session.RadiusSessionId != null && endedSessions.TryGetValue(session.RadiusSessionId, out var ended))
+                    {
+                        session.Status = "Disconnected";
+                        session.SessionEnd = ended.stopTime;
+                        session.BytesDownloaded = ended.bytesIn;
+                        session.BytesUploaded = ended.bytesOut;
+                        session.BytesUsed = ended.bytesIn + ended.bytesOut;
+                        session.LastActivity = ended.stopTime;
+                        markedCount++;
+                    }
+                }
+
+                if (markedCount > 0)
+                {
+                    await _dbContext.SaveChangesAsync();
+                    _logger.LogInformation("Marked {Count} sessions as disconnected based on FreeRADIUS data", markedCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error marking disconnected sessions");
             }
         }
 
@@ -672,8 +749,8 @@ namespace HotelWifiPortal.Services.WiFi
                     _logger.LogError(ex, "Error in WiFi monitoring service");
                 }
 
-                // Run every 5 minutes
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                // Run every 1 minute for faster session updates
+                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
             }
         }
     }

@@ -1044,18 +1044,23 @@ namespace HotelWifiPortal.Controllers.Portal
         {
             try
             {
-                // Check if there's already an active session for this MAC address
+                // IMPORTANT: We do NOT create sessions here anymore!
+                // Sessions are created by FreeRADIUS sync which has proper RadiusSessionId and IP.
+                // This method only UPDATES existing sessions if they exist.
+
                 var existingSession = await _dbContext.WifiSessions
                     .FirstOrDefaultAsync(s =>
                         s.MacAddress == macAddress &&
-                        s.GuestId == guest.Id &&
+                        s.RoomNumber == guest.RoomNumber &&
                         (s.Status == "Active" || s.Status == "QuotaExceeded"));
 
                 if (existingSession != null)
                 {
-                    // Update existing session instead of creating duplicate
+                    // Update existing session
                     existingSession.LastActivity = DateTime.UtcNow;
                     existingSession.AuthMethod = authMethod;
+                    existingSession.GuestId = guest.Id;
+                    existingSession.GuestName = guest.GuestName;
 
                     // If quota was exceeded but now has quota, reactivate
                     if (existingSession.Status == "QuotaExceeded" && !guest.IsQuotaExhausted)
@@ -1065,43 +1070,10 @@ namespace HotelWifiPortal.Controllers.Portal
                     }
 
                     await _dbContext.SaveChangesAsync();
-                    _logger.LogInformation("Updated existing session {Id} for MAC {Mac}", existingSession.Id, macAddress);
-                    return;
+                    _logger.LogDebug("Updated existing session {Id} for MAC {Mac}", existingSession.Id, macAddress);
                 }
-
-                // Also close any old sessions for this MAC that are not active
-                var oldSessions = await _dbContext.WifiSessions
-                    .Where(s => s.MacAddress == macAddress && s.GuestId == guest.Id && s.Status != "Active" && s.Status != "QuotaExceeded" && s.SessionEnd == null)
-                    .ToListAsync();
-
-                foreach (var old in oldSessions)
-                {
-                    old.SessionEnd = DateTime.UtcNow;
-                }
-
-                // Get bandwidth profile
-                var profile = await _dbContext.BandwidthProfiles
-                    .FirstOrDefaultAsync(p => p.IsActive && p.IsDefault);
-
-                var session = new WifiSession
-                {
-                    GuestId = guest.Id,
-                    RoomNumber = guest.RoomNumber,
-                    GuestName = guest.GuestName,
-                    MacAddress = macAddress,
-                    Status = guest.IsQuotaExhausted ? "QuotaExceeded" : "Active",
-                    ControllerType = "Mikrotik",
-                    AuthMethod = authMethod,
-                    BandwidthProfileId = profile?.Id,
-                    SessionStart = DateTime.UtcNow,
-                    LastActivity = DateTime.UtcNow
-                };
-
-                _dbContext.WifiSessions.Add(session);
-                guest.LastWifiLogin = DateTime.UtcNow;
-                await _dbContext.SaveChangesAsync();
-
-                _logger.LogInformation("WiFi session created: SessionId={Id} for MAC {Mac}", session.Id, macAddress);
+                // If no existing session, do nothing - FreeRADIUS sync will create it
+                // with proper RadiusSessionId and IP address
             }
             catch (Exception ex)
             {

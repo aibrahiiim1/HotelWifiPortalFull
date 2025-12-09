@@ -1,4 +1,5 @@
 using HotelWifiPortal.Data;
+using HotelWifiPortal.Models.Entities;
 using HotelWifiPortal.Models.ViewModels;
 using HotelWifiPortal.Services.WiFi;
 using Microsoft.AspNetCore.Authorization;
@@ -316,31 +317,206 @@ namespace HotelWifiPortal.Controllers.Admin
         [HttpPost]
         [ValidateAntiForgeryToken]
         [Authorize(Roles = "Admin,SuperAdmin")]
+        public async Task<IActionResult> SyncAllSessions()
+        {
+            try
+            {
+                var settings = await _dbContext.SystemSettings.ToListAsync();
+                var enabled = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
+                var connStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value;
+                var prefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
+
+                if (enabled?.ToLower() != "true" || string.IsNullOrEmpty(connStr))
+                {
+                    TempData["Error"] = "FreeRADIUS is not enabled or configured.";
+                    return RedirectToAction(nameof(Index));
+                }
+
+                using var connection = new MySqlConnection(connStr);
+                await connection.OpenAsync();
+
+                // Get ALL sessions from radacct (not just active ones)
+                // Note: Not using gigawords columns as they may not exist in older schemas
+                var sql = $@"
+                    SELECT 
+                        username,
+                        callingstationid,
+                        acctsessionid,
+                        acctstarttime,
+                        acctstoptime,
+                        framedipaddress,
+                        COALESCE(acctinputoctets, 0) as bytes_in,
+                        COALESCE(acctoutputoctets, 0) as bytes_out
+                    FROM {prefix}acct 
+                    ORDER BY acctstarttime DESC
+                    LIMIT 1000";
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = sql;
+
+                int created = 0, updated = 0, markedOffline = 0;
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                var radSessions = new List<(string username, string mac, string sessionId, DateTime start, DateTime? stop, string ip, long bytesIn, long bytesOut)>();
+
+                while (await reader.ReadAsync())
+                {
+                    var username = reader.GetString(0);
+                    var mac = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                    var sessionId = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                    var start = reader.IsDBNull(3) ? DateTime.UtcNow : reader.GetDateTime(3);
+                    var stop = reader.IsDBNull(4) ? (DateTime?)null : reader.GetDateTime(4);
+                    var ip = reader.IsDBNull(5) ? "" : reader.GetString(5);
+                    var bytesIn = reader.GetInt64(6);
+                    var bytesOut = reader.GetInt64(7);
+
+                    radSessions.Add((username, mac, sessionId, start, stop, ip, bytesIn, bytesOut));
+                }
+                await reader.CloseAsync();
+
+                // Get ALL guests (not just checked-in) to handle historical sessions
+                var guests = await _dbContext.Guests.ToDictionaryAsync(g => g.RoomNumber);
+
+                // Get all existing sessions by RadiusSessionId for quick lookup
+                var existingSessionIds = await _dbContext.WifiSessions
+                    .Where(s => !string.IsNullOrEmpty(s.RadiusSessionId))
+                    .Select(s => s.RadiusSessionId)
+                    .ToListAsync();
+                var existingSet = new HashSet<string>(existingSessionIds!);
+
+                foreach (var (username, mac, sessionId, start, stop, ip, bytesIn, bytesOut) in radSessions)
+                {
+                    if (string.IsNullOrEmpty(sessionId)) continue;
+
+                    if (existingSet.Contains(sessionId))
+                    {
+                        // Update existing session
+                        var existing = await _dbContext.WifiSessions.FirstOrDefaultAsync(s => s.RadiusSessionId == sessionId);
+                        if (existing != null)
+                        {
+                            existing.BytesDownloaded = bytesIn;
+                            existing.BytesUploaded = bytesOut;
+                            existing.BytesUsed = bytesIn + bytesOut;
+                            existing.LastActivity = DateTime.UtcNow;
+
+                            // Mark as disconnected if stopped in FreeRADIUS
+                            if (stop.HasValue && existing.Status == "Active")
+                            {
+                                existing.Status = "Disconnected";
+                                existing.SessionEnd = stop;
+                                markedOffline++;
+                            }
+                            updated++;
+                        }
+                    }
+                    else if (guests.TryGetValue(username, out var guest))
+                    {
+                        // Create new session
+                        var normalizedMac = mac.ToUpper().Replace("-", ":");
+                        var newSession = new WifiSession
+                        {
+                            GuestId = guest.Id,
+                            RoomNumber = username,
+                            GuestName = guest.GuestName,
+                            MacAddress = normalizedMac,
+                            IpAddress = ip,
+                            RadiusSessionId = sessionId,
+                            SessionStart = start,
+                            SessionEnd = stop,
+                            Status = stop.HasValue ? "Disconnected" : "Active",
+                            ControllerType = "FreeRADIUS",
+                            AuthMethod = "RADIUS",
+                            LastActivity = stop ?? DateTime.UtcNow,
+                            BytesDownloaded = bytesIn,
+                            BytesUploaded = bytesOut,
+                            BytesUsed = bytesIn + bytesOut
+                        };
+                        _dbContext.WifiSessions.Add(newSession);
+                        existingSet.Add(sessionId); // Prevent duplicates in same batch
+                        created++;
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync();
+                TempData["Success"] = $"Synced from FreeRADIUS: {created} created, {updated} updated, {markedOffline} marked offline.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing all sessions");
+                TempData["Error"] = $"Error: {ex.Message}";
+            }
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        [Authorize(Roles = "Admin,SuperAdmin")]
         public async Task<IActionResult> CleanupDuplicateSessions()
         {
             try
             {
-                var duplicateGroups = await _dbContext.WifiSessions
-                    .Where(s => s.Status == "Active" || s.Status == "QuotaExceeded")
-                    .GroupBy(s => new { s.GuestId, s.MacAddress })
-                    .Where(g => g.Count() > 1)
+                int merged = 0;
+                int deleted = 0;
+
+                // STEP 1: Find sessions without RadiusSessionId that have a matching session WITH RadiusSessionId
+                // These are portal-created duplicates that should be merged/deleted
+                var sessionsWithoutRadiusId = await _dbContext.WifiSessions
+                    .Where(s => string.IsNullOrEmpty(s.RadiusSessionId) &&
+                                (string.IsNullOrEmpty(s.IpAddress) || s.IpAddress == "-"))
                     .ToListAsync();
 
-                int removed = 0;
-                foreach (var group in duplicateGroups)
+                foreach (var orphan in sessionsWithoutRadiusId)
                 {
-                    var sessions = group.OrderByDescending(s => s.SessionStart).ToList();
-                    var keepSession = sessions.First();
-                    keepSession.BytesUsed = sessions.Sum(s => s.BytesUsed);
-                    foreach (var dup in sessions.Skip(1))
+                    // Find matching session with RadiusSessionId (same MAC, Room, similar time)
+                    var matchingSession = await _dbContext.WifiSessions
+                        .FirstOrDefaultAsync(s => s.MacAddress == orphan.MacAddress &&
+                                                   s.RoomNumber == orphan.RoomNumber &&
+                                                   !string.IsNullOrEmpty(s.RadiusSessionId) &&
+                                                   s.Id != orphan.Id);
+
+                    if (matchingSession != null)
                     {
-                        dup.Status = "Merged";
-                        dup.SessionEnd = DateTime.UtcNow;
-                        removed++;
+                        // The matching session has the real data from FreeRADIUS, mark orphan as merged
+                        orphan.Status = "Merged";
+                        orphan.SessionEnd = DateTime.UtcNow;
+                        merged++;
                     }
                 }
+
+                // STEP 2: Find duplicate active sessions for same MAC+Room (keep the one with RadiusSessionId)
+                var allSessions = await _dbContext.WifiSessions
+                    .Where(s => s.Status == "Active" || s.Status == "QuotaExceeded")
+                    .ToListAsync();
+
+                var groupedByMacRoom = allSessions
+                    .GroupBy(s => new { s.MacAddress, s.RoomNumber })
+                    .Where(g => g.Count() > 1);
+
+                foreach (var group in groupedByMacRoom)
+                {
+                    var sessions = group.OrderByDescending(s => !string.IsNullOrEmpty(s.RadiusSessionId))
+                                        .ThenByDescending(s => s.SessionStart)
+                                        .ToList();
+
+                    var keepSession = sessions.First(); // Keep the one with RadiusSessionId (or most recent)
+
+                    foreach (var dup in sessions.Skip(1))
+                    {
+                        // If duplicate has no RadiusSessionId, just mark as merged
+                        // If it has one, mark as merged but don't combine bytes (they're separate radacct records)
+                        dup.Status = "Merged";
+                        dup.SessionEnd = DateTime.UtcNow;
+                        deleted++;
+                    }
+                }
+
                 await _dbContext.SaveChangesAsync();
-                TempData["Success"] = removed > 0 ? $"Cleaned up {removed} duplicate sessions." : "No duplicate sessions found.";
+
+                var msg = new List<string>();
+                if (merged > 0) msg.Add($"{merged} orphan sessions merged");
+                if (deleted > 0) msg.Add($"{deleted} duplicate sessions cleaned");
+
+                TempData["Success"] = msg.Any() ? string.Join(", ", msg) : "No duplicate sessions found.";
             }
             catch (Exception ex)
             {

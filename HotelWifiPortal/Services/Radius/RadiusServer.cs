@@ -660,30 +660,21 @@ namespace HotelWifiPortal.Services.Radius
             var remainingQuota = guest.TotalQuotaBytes - guest.UsedQuotaBytes;
             if (remainingQuota < 0) remainingQuota = 0;
 
-            // Create or update WiFi session
+            // Only UPDATE existing session if found - don't create here
+            // Sessions are created by Accounting Start (with RadiusSessionId) or FreeRADIUS sync
             var existingSession = await dbContext.WifiSessions
-                .FirstOrDefaultAsync(s => s.MacAddress == macAddress && s.Status == "Active");
+                .FirstOrDefaultAsync(s => s.MacAddress == macAddress &&
+                                          s.RoomNumber == guest.RoomNumber &&
+                                          s.Status == "Active");
 
-            if (existingSession == null)
-            {
-                var session = new WifiSession
-                {
-                    GuestId = guest.Id,
-                    RoomNumber = guest.RoomNumber,
-                    GuestName = guest.GuestName,
-                    MacAddress = macAddress,
-                    Status = "Active",
-                    ControllerType = "Mikrotik",
-                    BandwidthProfileId = profile?.Id,
-                    SessionStart = DateTime.UtcNow,
-                    LastActivity = DateTime.UtcNow
-                };
-                dbContext.WifiSessions.Add(session);
-            }
-            else
+            if (existingSession != null)
             {
                 existingSession.LastActivity = DateTime.UtcNow;
+                existingSession.GuestId = guest.Id;
+                existingSession.GuestName = guest.GuestName;
+                existingSession.BandwidthProfileId = profile?.Id;
             }
+            // Don't create session here - Accounting Start will create it with RadiusSessionId
 
             guest.LastWifiLogin = DateTime.UtcNow;
             await dbContext.SaveChangesAsync();
@@ -725,23 +716,39 @@ namespace HotelWifiPortal.Services.Radius
             // Get room number from username
             var roomNumber = username.Split('@')[0];
 
-            // Check for existing active session with same MAC
+            // Check for existing active session with same MAC AND Room
             var existingSession = await dbContext.WifiSessions
-                .FirstOrDefaultAsync(s => s.MacAddress == macAddress && s.Status == "Active");
+                .FirstOrDefaultAsync(s => s.MacAddress == macAddress &&
+                                          s.RoomNumber == roomNumber &&
+                                          s.Status == "Active");
 
             if (existingSession != null)
             {
-                // Update existing session with new session ID
-                existingSession.RadiusSessionId = sessionId;
+                // Update existing session with RadiusSessionId if not set
+                if (string.IsNullOrEmpty(existingSession.RadiusSessionId))
+                {
+                    existingSession.RadiusSessionId = sessionId;
+                }
                 existingSession.LastActivity = DateTime.UtcNow;
                 await dbContext.SaveChangesAsync();
                 _logger.LogInformation("Accounting Start: Updated existing session for User={User}, MAC={MAC}", username, macAddress);
                 return;
             }
 
+            // Also check if session with this RadiusSessionId already exists
+            var sessionById = await dbContext.WifiSessions
+                .FirstOrDefaultAsync(s => s.RadiusSessionId == sessionId);
+
+            if (sessionById != null)
+            {
+                _logger.LogDebug("Accounting Start: Session with RadiusSessionId={SessionId} already exists", sessionId);
+                return;
+            }
+
             // Find guest by room number
             var guest = await dbContext.Guests
-                .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber && g.Status == "checked-in");
+                .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber &&
+                    (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"));
 
             if (guest != null)
             {
@@ -750,6 +757,7 @@ namespace HotelWifiPortal.Services.Radius
                 {
                     GuestId = guest.Id,
                     RoomNumber = roomNumber,
+                    GuestName = guest.GuestName,
                     MacAddress = macAddress,
                     RadiusSessionId = sessionId,
                     SessionStart = DateTime.UtcNow,
@@ -778,9 +786,26 @@ namespace HotelWifiPortal.Services.Radius
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-            var session = await dbContext.WifiSessions
-                .Include(s => s.Guest)
-                .FirstOrDefaultAsync(s => s.MacAddress == macAddress && s.Status == "Active");
+            // Try to find session by RadiusSessionId first (most accurate)
+            WifiSession? session = null;
+
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                session = await dbContext.WifiSessions
+                    .Include(s => s.Guest)
+                    .FirstOrDefaultAsync(s => s.RadiusSessionId == sessionId);
+            }
+
+            // Fallback: find by MAC + Room + Active
+            if (session == null)
+            {
+                var roomNumber = username.Split('@')[0];
+                session = await dbContext.WifiSessions
+                    .Include(s => s.Guest)
+                    .FirstOrDefaultAsync(s => s.MacAddress == macAddress &&
+                                              s.RoomNumber == roomNumber &&
+                                              s.Status == "Active");
+            }
 
             if (session != null)
             {
@@ -844,9 +869,26 @@ namespace HotelWifiPortal.Services.Radius
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-            var session = await dbContext.WifiSessions
-                .Include(s => s.Guest)
-                .FirstOrDefaultAsync(s => s.MacAddress == macAddress && s.Status == "Active");
+            // Try to find session by RadiusSessionId first (most accurate)
+            WifiSession? session = null;
+
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                session = await dbContext.WifiSessions
+                    .Include(s => s.Guest)
+                    .FirstOrDefaultAsync(s => s.RadiusSessionId == sessionId);
+            }
+
+            // Fallback: find by MAC + Room + Active
+            if (session == null)
+            {
+                var roomNumber = username.Split('@')[0];
+                session = await dbContext.WifiSessions
+                    .Include(s => s.Guest)
+                    .FirstOrDefaultAsync(s => s.MacAddress == macAddress &&
+                                              s.RoomNumber == roomNumber &&
+                                              s.Status == "Active");
+            }
 
             if (session != null)
             {
@@ -860,6 +902,12 @@ namespace HotelWifiPortal.Services.Radius
                 session.BytesUploaded = outputBytes;
                 session.BytesUsed = currentTotal;
                 session.LastActivity = DateTime.UtcNow;
+
+                // Set RadiusSessionId if not already set
+                if (string.IsNullOrEmpty(session.RadiusSessionId) && !string.IsNullOrEmpty(sessionId))
+                {
+                    session.RadiusSessionId = sessionId;
+                }
 
                 // NOTE: Do NOT update guest.UsedQuotaBytes here!
                 // Guest quota is updated from FreeRADIUS radacct aggregated by room number.

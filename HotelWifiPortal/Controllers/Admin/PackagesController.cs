@@ -85,6 +85,11 @@ namespace HotelWifiPortal.Controllers.Admin
                 MaxStayDays = package.MaxStayDays,
                 QuotaGB = package.QuotaGB,
                 SpeedLimitKbps = package.SpeedLimitKbps,
+                DownloadSpeedKbps = package.DownloadSpeedKbps,
+                UploadSpeedKbps = package.UploadSpeedKbps,
+                MaxDevices = package.MaxDevices,
+                SharedUsage = package.SharedUsage,
+                SharedBandwidth = package.SharedBandwidth,
                 BadgeColor = package.BadgeColor,
                 SortOrder = package.SortOrder,
                 IsActive = package.IsActive
@@ -119,6 +124,11 @@ namespace HotelWifiPortal.Controllers.Admin
             package.MaxStayDays = model.MaxStayDays;
             package.QuotaGB = model.QuotaGB;
             package.SpeedLimitKbps = model.SpeedLimitKbps;
+            package.DownloadSpeedKbps = model.DownloadSpeedKbps;
+            package.UploadSpeedKbps = model.UploadSpeedKbps;
+            package.MaxDevices = model.MaxDevices;
+            package.SharedUsage = model.SharedUsage;
+            package.SharedBandwidth = model.SharedBandwidth;
             package.BadgeColor = model.BadgeColor;
             package.SortOrder = model.SortOrder;
             package.IsActive = model.IsActive;
@@ -222,6 +232,11 @@ namespace HotelWifiPortal.Controllers.Admin
                 DurationDays = package.DurationDays,
                 QuotaGB = package.QuotaGB,
                 SpeedLimitKbps = package.SpeedLimitKbps,
+                DownloadSpeedKbps = package.DownloadSpeedKbps,
+                UploadSpeedKbps = package.UploadSpeedKbps,
+                MaxDevices = package.MaxDevices,
+                SharedUsage = package.SharedUsage,
+                SharedBandwidth = package.SharedBandwidth,
                 BadgeColor = package.BadgeColor,
                 SortOrder = package.SortOrder,
                 IsActive = package.IsActive,
@@ -260,6 +275,11 @@ namespace HotelWifiPortal.Controllers.Admin
             package.DurationDays = model.DurationDays;
             package.QuotaGB = model.QuotaGB;
             package.SpeedLimitKbps = model.SpeedLimitKbps;
+            package.DownloadSpeedKbps = model.DownloadSpeedKbps;
+            package.UploadSpeedKbps = model.UploadSpeedKbps;
+            package.MaxDevices = model.MaxDevices;
+            package.SharedUsage = model.SharedUsage;
+            package.SharedBandwidth = model.SharedBandwidth;
             package.BadgeColor = model.BadgeColor;
             package.SortOrder = model.SortOrder;
             package.IsActive = model.IsActive;
@@ -323,7 +343,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault)
                     .ToListAsync();
-                
+
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -405,7 +425,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault && p.Id != id)
                     .ToListAsync();
-                
+
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -531,7 +551,7 @@ namespace HotelWifiPortal.Controllers.Admin
 
                 // Get FIAS server service
                 var fiasServer = HttpContext.RequestServices.GetRequiredService<HotelWifiPortal.Services.PMS.FiasSocketServer>();
-                
+
                 if (!fiasServer.IsConnected)
                 {
                     TempData["Error"] = "Not connected to PMS. Please check FIAS connection.";
@@ -552,15 +572,15 @@ namespace HotelWifiPortal.Controllers.Admin
                 transaction.PostedToPMSAt = DateTime.UtcNow;
                 transaction.Status = "PostedToPMS";
                 transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
-                transaction.PMSResponse = pmsSettings.PostByReservationNumber 
-                    ? $"Success (by Reservation# {transaction.ReservationNumber})" 
+                transaction.PMSResponse = pmsSettings.PostByReservationNumber
+                    ? $"Success (by Reservation# {transaction.ReservationNumber})"
                     : $"Success (by Room {transaction.RoomNumber})";
                 await _dbContext.SaveChangesAsync();
 
-                var identifier = pmsSettings.PostByReservationNumber 
-                    ? $"Reservation# {transaction.ReservationNumber}" 
+                var identifier = pmsSettings.PostByReservationNumber
+                    ? $"Reservation# {transaction.ReservationNumber}"
                     : $"Room {transaction.RoomNumber}";
-                    
+
                 _logger.LogInformation("Manually posted transaction {Id} to PMS: {Identifier}, Amount {Amount}",
                     transaction.Id, identifier, transaction.Amount);
 
@@ -621,8 +641,8 @@ namespace HotelWifiPortal.Controllers.Admin
                     transaction.PostedToPMSAt = DateTime.UtcNow;
                     transaction.Status = "PostedToPMS";
                     transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
-                    transaction.PMSResponse = pmsSettings.PostByReservationNumber 
-                        ? $"Success (by Reservation# {transaction.ReservationNumber})" 
+                    transaction.PMSResponse = pmsSettings.PostByReservationNumber
+                        ? $"Success (by Reservation# {transaction.ReservationNumber})"
                         : $"Success (by Room {transaction.RoomNumber})";
                     posted++;
                 }
