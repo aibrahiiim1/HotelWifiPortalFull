@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -280,6 +280,16 @@ namespace HotelWifiPortal.Services.Radius
             Attributes[attrType].Add(Encoding.UTF8.GetBytes(value));
         }
 
+        public void AddIPAddress(byte attrType, string ipAddress)
+        {
+            if (!Attributes.ContainsKey(attrType))
+                Attributes[attrType] = new List<byte[]>();
+
+            // Parse IP and convert to 4 bytes
+            var ip = IPAddress.Parse(ipAddress);
+            Attributes[attrType].Add(ip.GetAddressBytes());
+        }
+
         public void AddInt(byte attrType, int value)
         {
             if (!Attributes.ContainsKey(attrType))
@@ -366,6 +376,7 @@ namespace HotelWifiPortal.Services.Radius
         private UdpClient? _coaClient;
 
         private string _sharedSecret = "radius_secret";
+        private string _mikrotikCoaSecret = "C0r@lSe@";  // MikroTik RADIUS incoming secret
         private int _authPort = 1812;
         private int _acctPort = 1813;
         private int _coaPort = 3799;
@@ -381,6 +392,7 @@ namespace HotelWifiPortal.Services.Radius
 
             // Load configuration
             _sharedSecret = _configuration["Radius:SharedSecret"] ?? "radius_secret";
+            _mikrotikCoaSecret = _configuration["Radius:MikrotikCoASecret"] ?? "C0r@lSe@";  // Default to known MikroTik secret
             _authPort = _configuration.GetValue("Radius:AuthPort", 1812);
             _acctPort = _configuration.GetValue("Radius:AcctPort", 1813);
             _coaPort = _configuration.GetValue("Radius:CoAPort", 3799);
@@ -1099,7 +1111,11 @@ namespace HotelWifiPortal.Services.Radius
         /// <summary>
         /// Send Disconnect-Request (CoA) to MikroTik to disconnect a user
         /// </summary>
-        public async Task<bool> DisconnectUserAsync(string nasIp, string macAddress, string sessionId = "")
+        /// <summary>
+        /// Disconnect user from MikroTik NAS
+        /// MikroTik requires Framed-IP-Address for disconnect to work!
+        /// </summary>
+        public async Task<bool> DisconnectUserAsync(string nasIp, string macAddress, string sessionId = "", string framedIpAddress = "", string username = "")
         {
             try
             {
@@ -1113,16 +1129,36 @@ namespace HotelWifiPortal.Services.Radius
                 // Generate random authenticator
                 Random.Shared.NextBytes(request.Authenticator);
 
-                // Add attributes to identify the session
-                request.AddString(RadiusAttribute.CallingStationId, macAddress);
+                // MikroTik requires Framed-IP-Address for disconnect!
+                // This is the most reliable attribute for MikroTik
+                if (!string.IsNullOrEmpty(framedIpAddress))
+                {
+                    request.AddIPAddress(RadiusAttribute.FramedIpAddress, framedIpAddress);
+                    _logger.LogInformation("Disconnect: Using Framed-IP-Address={IP}", framedIpAddress);
+                }
+
+                // Add User-Name if available (helps MikroTik identify session)
+                if (!string.IsNullOrEmpty(username))
+                {
+                    request.AddString(RadiusAttribute.UserName, username);
+                    _logger.LogInformation("Disconnect: Using User-Name={User}", username);
+                }
+
+                // Also add MAC and Session ID as fallback identifiers
+                if (!string.IsNullOrEmpty(macAddress))
+                {
+                    request.AddString(RadiusAttribute.CallingStationId, macAddress);
+                }
                 if (!string.IsNullOrEmpty(sessionId))
                 {
                     request.AddString(RadiusAttribute.AcctSessionId, sessionId);
                 }
 
-                var packet = request.ToBytes(_sharedSecret);
+                // Use MikroTik CoA secret for disconnect (may be different from general RADIUS secret)
+                var packet = request.ToBytes(_mikrotikCoaSecret);
                 var endpoint = new IPEndPoint(IPAddress.Parse(nasIp), _coaPort);
 
+                _logger.LogInformation("Sending Disconnect-Request to {NAS}:{Port}", nasIp, _coaPort);
                 await _coaClient!.SendAsync(packet, packet.Length, endpoint);
 
                 // Wait for response (with timeout)
@@ -1134,18 +1170,18 @@ namespace HotelWifiPortal.Services.Radius
 
                     if (response.Code == RadiusCode.DisconnectAck)
                     {
-                        _logger.LogInformation("Disconnect successful for MAC {MAC}", macAddress);
+                        _logger.LogInformation("✓ Disconnect-ACK received for {IP}/{MAC}", framedIpAddress, macAddress);
                         return true;
                     }
                     else
                     {
-                        _logger.LogWarning("Disconnect failed for MAC {MAC}: Code={Code}", macAddress, response.Code);
+                        _logger.LogWarning("✗ Disconnect-NAK for {IP}/{MAC}: Code={Code}", framedIpAddress, macAddress, response.Code);
                         return false;
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("Disconnect timeout for MAC {MAC}", macAddress);
+                    _logger.LogWarning("✗ Disconnect timeout for {IP}/{MAC}", framedIpAddress, macAddress);
                     return false;
                 }
             }

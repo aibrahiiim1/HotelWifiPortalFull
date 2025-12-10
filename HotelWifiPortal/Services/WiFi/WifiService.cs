@@ -382,6 +382,8 @@ namespace HotelWifiPortal.Services.WiFi
                 {
                     try
                     {
+                        // Count ALL sessions for this username (entire stay usage)
+                        // This ensures quota is cumulative and doesn't reset when session ends
                         var sql = $@"
                             SELECT 
                                 COALESCE(SUM(acctinputoctets), 0) as total_input,
@@ -495,14 +497,14 @@ namespace HotelWifiPortal.Services.WiFi
                                 .FirstOrDefaultAsync(s => s.RadiusSessionId == sessionId);
                         }
 
-                        // Fallback: check by MAC + Room + Active status (only if no sessionId match)
+                        // Fallback: check by MAC + Room + Active/QuotaExceeded status (only if no sessionId match)
                         if (existingSession == null)
                         {
                             existingSession = await _dbContext.WifiSessions
                                 .FirstOrDefaultAsync(s =>
                                     (s.MacAddress == normalizedMac || s.MacAddress == mac) &&
                                     s.RoomNumber == username &&
-                                    s.Status == "Active" &&
+                                    (s.Status == "Active" || s.Status == "QuotaExceeded") &&
                                     string.IsNullOrEmpty(s.RadiusSessionId));
                         }
 
@@ -719,7 +721,9 @@ namespace HotelWifiPortal.Services.WiFi
         }
 
         /// <summary>
-        /// Check quota by querying FreeRADIUS radacct directly - more accurate!
+        /// Check quota by querying FreeRADIUS radacct directly
+        /// PROFESSIONAL ARCHITECTURE: Portal only reads/updates status
+        /// FreeRADIUS check_quota.sh script handles actual disconnect!
         /// </summary>
         private async Task CheckQuotaFromFreeRadiusAsync(string mikrotikIp, IWifiController? controller)
         {
@@ -759,7 +763,8 @@ namespace HotelWifiPortal.Services.WiFi
                 {
                     try
                     {
-                        // Query radacct for TOTAL room usage (sum of all devices)
+                        // Query radacct for TOTAL usage (ALL sessions - active AND closed)
+                        // This is critical: quota is cumulative for entire stay, not per-session
                         var usageSql = $@"
                             SELECT 
                                 COALESCE(SUM(acctinputoctets), 0) + COALESCE(SUM(acctoutputoctets), 0) as total_bytes
@@ -774,96 +779,42 @@ namespace HotelWifiPortal.Services.WiFi
                         var usedMB = totalBytes / 1048576.0;
                         var quotaMB = quotaBytes / 1048576.0;
 
-                        // Update guest's UsedQuotaBytes if higher
-                        if (totalBytes > guest.UsedQuotaBytes)
+                        // Update guest's UsedQuotaBytes
+                        if (totalBytes != guest.UsedQuotaBytes)
                         {
                             guest.UsedQuotaBytes = totalBytes;
                             _dbContext.Entry(guest).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
                         }
 
-                        // Check if quota exceeded
+                        // Check if quota exceeded - UPDATE PORTAL STATUS ONLY
+                        // FreeRADIUS check_quota.sh handles actual disconnect!
                         if (totalBytes >= quotaBytes)
                         {
-                            _logger.LogWarning("=== ROOM {Room} EXCEEDED QUOTA: {Used:F2}MB / {Quota:F2}MB ===",
+                            _logger.LogWarning("=== ROOM {Room} QUOTA STATUS: {Used:F2}MB / {Quota:F2}MB (EXCEEDED) ===",
                                 guest.RoomNumber, usedMB, quotaMB);
 
-                            // Get ALL active sessions from radacct for this room (including NAS IP for CoA)
-                            var sessionSql = $@"
-                                SELECT acctsessionid, callingstationid, framedipaddress, nasipaddress
-                                FROM {tablePrefix}acct 
-                                WHERE username = @username AND acctstoptime IS NULL";
+                            // Update portal sessions to QuotaExceeded status
+                            // This is for display purposes only - FreeRADIUS handles enforcement
+                            var activeSessions = await _dbContext.WifiSessions
+                                .Where(s => s.RoomNumber == guest.RoomNumber && s.Status == "Active")
+                                .ToListAsync();
 
-                            using var sessionCmd = new MySqlConnector.MySqlCommand(sessionSql, connection);
-                            sessionCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
-
-                            var sessionsToDisconnect = new List<(string sessionId, string mac, string ip, string nasIp)>();
-                            using var reader = await sessionCmd.ExecuteReaderAsync();
-                            while (await reader.ReadAsync())
+                            foreach (var session in activeSessions)
                             {
-                                var sessionId = reader.GetString(0);
-                                var mac = reader.IsDBNull(1) ? "" : reader.GetString(1);
-                                var ip = reader.IsDBNull(2) ? "" : reader.GetString(2);
-                                var nasIp = reader.IsDBNull(3) ? "" : reader.GetString(3);
-                                sessionsToDisconnect.Add((sessionId, mac, ip, nasIp));
+                                session.Status = "QuotaExceeded";
+                                session.SessionEnd = DateTime.UtcNow;
+                                _logger.LogInformation("Portal: Marked session {Mac} for Room {Room} as QuotaExceeded",
+                                    session.MacAddress, guest.RoomNumber);
                             }
 
-                            _logger.LogInformation("Found {Count} active sessions in radacct for Room {Room} to disconnect",
-                                sessionsToDisconnect.Count, guest.RoomNumber);
-
-                            // Disconnect each device via CoA
-                            foreach (var (sessionId, mac, ip, nasIpFromRadacct) in sessionsToDisconnect)
-                            {
-                                try
-                                {
-                                    // Use NAS IP from radacct if available, otherwise use configured MikroTik IP
-                                    var targetNasIp = !string.IsNullOrEmpty(nasIpFromRadacct) ? nasIpFromRadacct : mikrotikIp;
-
-                                    _logger.LogWarning("=== DISCONNECTING DEVICE ===");
-                                    _logger.LogWarning("Room={Room}, MAC={Mac}, SessionId={SessionId}, NAS_IP={NasIp}",
-                                        guest.RoomNumber, mac, sessionId, targetNasIp);
-
-                                    // RADIUS CoA Disconnect
-                                    if (!string.IsNullOrEmpty(targetNasIp) && !string.IsNullOrEmpty(sessionId))
-                                    {
-                                        var radiusServer = _serviceProvider.GetService<RadiusServer>();
-                                        if (radiusServer != null)
-                                        {
-                                            var disconnected = await radiusServer.DisconnectUserAsync(
-                                                targetNasIp, mac, sessionId);
-                                            _logger.LogWarning("CoA Disconnect for {Mac} to {NasIp}: {Result}",
-                                                mac, targetNasIp, disconnected ? "SUCCESS" : "FAILED");
-                                        }
-                                        else
-                                        {
-                                            _logger.LogError("RadiusServer service not available for CoA!");
-                                        }
-                                    }
-                                    else
-                                    {
-                                        _logger.LogError("Cannot send CoA: NAS_IP={NasIp}, SessionId={SessionId}",
-                                            targetNasIp, sessionId);
-                                    }
-
-                                    // Also try MikroTik REST API
-                                    if (controller != null && !string.IsNullOrEmpty(mac))
-                                    {
-                                        await controller.DisconnectUserAsync(mac);
-                                    }
-
-                                    // Update portal session if exists
-                                    var portalSession = await _dbContext.WifiSessions
-                                        .FirstOrDefaultAsync(s => s.MacAddress == mac && s.Status == "Active");
-                                    if (portalSession != null)
-                                    {
-                                        portalSession.Status = "QuotaExceeded";
-                                        portalSession.SessionEnd = DateTime.UtcNow;
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, "Error disconnecting {Mac}", mac);
-                                }
-                            }
+                            // NOTE: We do NOT send CoA disconnect from portal!
+                            // FreeRADIUS check_quota.sh script running on FreeRADIUS server handles this
+                            // because portal cannot reach MikroTik directly (different network segment)
+                        }
+                        else
+                        {
+                            _logger.LogDebug("Room {Room}: {Used:F2}MB / {Quota:F2}MB ({Percent:F1}%)",
+                                guest.RoomNumber, usedMB, quotaMB, (usedMB / quotaMB) * 100);
                         }
                     }
                     catch (Exception ex)
@@ -887,74 +838,110 @@ namespace HotelWifiPortal.Services.WiFi
         /// </summary>
         private async Task CheckQuotaFromPortalAsync(string mikrotikIp, IWifiController? controller)
         {
+            // Get guests that MIGHT be over quota based on stored UsedQuotaBytes
+            // We'll verify against actual radacct data before marking sessions
             var guestsOverQuota = await _dbContext.Guests
                 .Where(g => (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn") &&
                             g.UsedQuotaBytes >= (g.FreeQuotaBytes + g.PaidQuotaBytes) &&
                             (g.FreeQuotaBytes + g.PaidQuotaBytes) > 0)
                 .ToListAsync();
 
-            foreach (var guest in guestsOverQuota)
+            // If no guests appear over quota from portal data, nothing to do
+            if (!guestsOverQuota.Any())
+                return;
+
+            // Verify against actual FreeRADIUS radacct data before taking action
+            var connectionString = await _dbContext.SystemSettings
+                .Where(s => s.Key == "FreeRadiusConnectionString")
+                .Select(s => s.Value)
+                .FirstOrDefaultAsync();
+
+            if (string.IsNullOrEmpty(connectionString))
             {
-                // Mark ALL sessions for this guest by BOTH GuestId AND RoomNumber
-                // This ensures we catch sessions that might have GuestId=0 but correct RoomNumber
-                var sessions = await _dbContext.WifiSessions
-                    .Where(s => (s.GuestId == guest.Id || s.RoomNumber == guest.RoomNumber) &&
-                                s.Status == "Active")
-                    .ToListAsync();
-
-                if (sessions.Any())
-                {
-                    _logger.LogWarning("=== ROOM {Room} EXCEEDED QUOTA: {Used}MB / {Total}MB ===",
-                        guest.RoomNumber, guest.UsedQuotaBytes / 1048576.0, guest.TotalQuotaBytes / 1048576.0);
-                    _logger.LogInformation("Disconnecting {Count} active sessions for Room {Room}",
-                        sessions.Count, guest.RoomNumber);
-                }
-
-                foreach (var session in sessions)
-                {
-                    try
-                    {
-                        // DISCONNECT the device via RADIUS CoA (not just throttle)
-                        if (!string.IsNullOrEmpty(mikrotikIp) && !string.IsNullOrEmpty(session.RadiusSessionId))
-                        {
-                            var radiusServer = _serviceProvider.GetService<RadiusServer>();
-                            if (radiusServer != null)
-                            {
-                                var disconnected = await radiusServer.DisconnectUserAsync(
-                                    mikrotikIp, session.MacAddress, session.RadiusSessionId);
-
-                                _logger.LogInformation("CoA Disconnect for {Mac}: {Result}",
-                                    session.MacAddress, disconnected ? "Success" : "Failed");
-                            }
-                        }
-
-                        // Also try MikroTik REST API to remove hotspot user
-                        if (controller != null)
-                        {
-                            await controller.DisconnectUserAsync(session.MacAddress);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Error disconnecting {Mac}", session.MacAddress);
-                    }
-
-                    // Mark session as QuotaExceeded
-                    session.Status = "QuotaExceeded";
-                    session.SessionEnd = DateTime.UtcNow;
-
-                    // Ensure GuestId is set correctly
-                    if (session.GuestId != guest.Id)
-                    {
-                        session.GuestId = guest.Id;
-                    }
-
-                    _logger.LogInformation("Marked session {Mac} as QuotaExceeded for Room {Room}",
-                        session.MacAddress, guest.RoomNumber);
-                }
+                _logger.LogWarning("FreeRADIUS not configured, cannot verify quota from radacct");
+                return;
             }
 
-            await _dbContext.SaveChangesAsync();
+            var tablePrefix = await _dbContext.SystemSettings
+                .Where(s => s.Key == "FreeRadiusTablePrefix")
+                .Select(s => s.Value)
+                .FirstOrDefaultAsync() ?? "rad";
+
+            try
+            {
+                using var connection = new MySqlConnector.MySqlConnection(connectionString);
+                await connection.OpenAsync();
+
+                foreach (var guest in guestsOverQuota)
+                {
+                    // Query TOTAL usage from radacct (ALL sessions - active AND closed)
+                    // Quota is cumulative for entire stay
+                    var usageSql = $@"
+                        SELECT COALESCE(SUM(acctinputoctets + acctoutputoctets), 0) as total_bytes
+                        FROM {tablePrefix}acct 
+                        WHERE username = @username";
+
+                    using var usageCmd = new MySqlConnector.MySqlCommand(usageSql, connection);
+                    usageCmd.Parameters.AddWithValue("@username", guest.RoomNumber);
+                    var actualBytes = Convert.ToInt64(await usageCmd.ExecuteScalarAsync() ?? 0L);
+
+                    var quotaBytes = guest.FreeQuotaBytes + guest.PaidQuotaBytes;
+
+                    // Only mark as exceeded if ACTUAL usage exceeds quota
+                    if (actualBytes < quotaBytes)
+                    {
+                        _logger.LogDebug("Room {Room}: Stored UsedQuotaBytes={Stored}MB but actual active usage={Actual}MB, quota={Quota}MB - NOT exceeded",
+                            guest.RoomNumber, guest.UsedQuotaBytes / 1048576.0, actualBytes / 1048576.0, quotaBytes / 1048576.0);
+
+                        // Update UsedQuotaBytes to actual value
+                        if (guest.UsedQuotaBytes != actualBytes)
+                        {
+                            guest.UsedQuotaBytes = actualBytes;
+                        }
+                        continue;
+                    }
+
+                    // Mark ALL sessions for this guest by BOTH GuestId AND RoomNumber
+                    var sessions = await _dbContext.WifiSessions
+                        .Where(s => (s.GuestId == guest.Id || s.RoomNumber == guest.RoomNumber) &&
+                                    s.Status == "Active")
+                        .ToListAsync();
+
+                    if (sessions.Any())
+                    {
+                        _logger.LogWarning("=== ROOM {Room} EXCEEDED QUOTA: {Used}MB / {Total}MB ===",
+                            guest.RoomNumber, actualBytes / 1048576.0, quotaBytes / 1048576.0);
+                        _logger.LogInformation("Disconnecting {Count} active sessions for Room {Room}",
+                            sessions.Count, guest.RoomNumber);
+                    }
+
+                    foreach (var session in sessions)
+                    {
+                        // Mark session as QuotaExceeded (portal status only)
+                        // FreeRADIUS check_quota.sh handles actual disconnect!
+                        session.Status = "QuotaExceeded";
+                        session.SessionEnd = DateTime.UtcNow;
+
+                        // Ensure GuestId is set correctly
+                        if (session.GuestId != guest.Id)
+                        {
+                            session.GuestId = guest.Id;
+                        }
+
+                        _logger.LogInformation("Portal: Marked session {Mac} as QuotaExceeded for Room {Room}",
+                            session.MacAddress, guest.RoomNumber);
+
+                        // NOTE: We do NOT send CoA disconnect from portal!
+                        // FreeRADIUS check_quota.sh script handles enforcement
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in CheckQuotaFromPortalAsync");
+            }
         }
     }
 

@@ -93,6 +93,9 @@ namespace HotelWifiPortal.Models.ViewModels
     {
         public Guest Guest { get; set; } = new();
         public double UsedQuotaGB { get; set; }
+        public double TotalQuotaGB { get; set; }
+        public double RemainingQuotaGB { get; set; }
+        public int UsagePercentage { get; set; }
         public List<PaidPackage> AvailablePackages { get; set; } = new();
         public string? ErrorMessage { get; set; }
     }
