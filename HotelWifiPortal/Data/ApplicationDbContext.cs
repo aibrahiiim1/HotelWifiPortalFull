@@ -23,6 +23,7 @@ namespace HotelWifiPortal.Data
 
         // Transactions
         public DbSet<PaymentTransaction> PaymentTransactions { get; set; }
+        public DbSet<GuestPaidPackage> GuestPaidPackages { get; set; }
 
         // Logs
         public DbSet<UsageLog> UsageLogs { get; set; }

@@ -1,0 +1,161 @@
+@model HotelWifiPortal.Models.ViewModels.BatchLocalUserViewModel
+@{
+    ViewData["Title"] = "Batch Create Users";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-people-fill me-2"></i>Batch Create Local Users</h2>
+    <a asp-action="Local" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-2"></i>Back to List
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Create Multiple Users</h5>
+            </div>
+            <div class="card-body">
+                <form asp-action="BatchCreate" method="post">
+                    @Html.AntiForgeryToken()
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label asp-for="UsernamePrefix" class="form-label">Username Prefix</label>
+                            <input asp-for="UsernamePrefix" class="form-control" placeholder="guest" />
+                            <span asp-validation-for="UsernamePrefix" class="text-danger"></span>
+                            <small class="text-muted">Users will be named: guest1, guest2, guest3...</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label asp-for="Count" class="form-label">Number of Users</label>
+                            <input asp-for="Count" type="number" class="form-control" min="1" max="100" />
+                            <span asp-validation-for="Count" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-3">
+                            <label asp-for="PasswordLength" class="form-label">Password Length</label>
+                            <input asp-for="PasswordLength" type="number" class="form-control" min="4" max="20" />
+                            <span asp-validation-for="PasswordLength" class="text-danger"></span>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label asp-for="UserType" class="form-label">User Type</label>
+                            <select asp-for="UserType" class="form-select">
+                                <option value="Guest">Guest</option>
+                                <option value="Visitor">Visitor</option>
+                                <option value="Staff">Staff</option>
+                                <option value="Conference">Conference</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="QuotaGB" class="form-label">Quota (GB)</label>
+                            <input asp-for="QuotaGB" type="number" step="0.5" class="form-control" />
+                            <small class="text-muted">0 = Unlimited</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="MaxDevices" class="form-label">Max Devices</label>
+                            <input asp-for="MaxDevices" type="number" class="form-control" min="1" max="10" />
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label asp-for="DownloadSpeedKbps" class="form-label">Download Speed (Kbps)</label>
+                            <div class="input-group">
+                                <input asp-for="DownloadSpeedKbps" type="number" class="form-control" />
+                                <span class="input-group-text">Kbps</span>
+                            </div>
+                            <small class="text-muted">10240 = 10 Mbps</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label asp-for="UploadSpeedKbps" class="form-label">Upload Speed (Kbps)</label>
+                            <div class="input-group">
+                                <input asp-for="UploadSpeedKbps" type="number" class="form-control" />
+                                <span class="input-group-text">Kbps</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label asp-for="ValidFrom" class="form-label">Valid From</label>
+                            <input asp-for="ValidFrom" type="date" class="form-control" />
+                        </div>
+                        <div class="col-md-6">
+                            <label asp-for="ValidUntil" class="form-label">Valid Until</label>
+                            <input asp-for="ValidUntil" type="date" class="form-control" />
+                        </div>
+                    </div>
+
+                    <div class="mb-3 form-check">
+                        <input asp-for="IsActive" class="form-check-input" />
+                        <label asp-for="IsActive" class="form-check-label">Active</label>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-people-fill me-2"></i>Create @Model.Count Users
+                        </button>
+                        <a asp-action="Local" class="btn btn-outline-secondary">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="card bg-light">
+            <div class="card-body">
+                <h6><i class="bi bi-info-circle me-2"></i>Preview</h6>
+                <p class="small text-muted mb-2">Users will be created with:</p>
+                <ul class="small mb-0">
+                    <li>Usernames: <strong id="previewPrefix">guest</strong>1 to <strong id="previewPrefix2">guest</strong><span id="previewCount">10</span></li>
+                    <li>Random <span id="previewPwdLen">8</span>-character passwords</li>
+                    <li>Type: <span id="previewType">Guest</span></li>
+                    <li>Quota: <span id="previewQuota">5</span> GB</li>
+                    <li>Speed: <span id="previewSpeed">10</span> Mbps down</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-body">
+                <h6><i class="bi bi-lightbulb me-2"></i>Tips</h6>
+                <ul class="small mb-0">
+                    <li>Generated passwords are random and displayed after creation</li>
+                    <li>You can print the user list for distribution</li>
+                    <li>Maximum 100 users per batch</li>
+                    <li>Existing usernames are automatically skipped</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    // Update preview
+    document.getElementById('UsernamePrefix').addEventListener('input', function() {
+        document.getElementById('previewPrefix').textContent = this.value || 'guest';
+        document.getElementById('previewPrefix2').textContent = this.value || 'guest';
+    });
+    document.getElementById('Count').addEventListener('input', function() {
+        document.getElementById('previewCount').textContent = this.value || '10';
+    });
+    document.getElementById('PasswordLength').addEventListener('input', function() {
+        document.getElementById('previewPwdLen').textContent = this.value || '8';
+    });
+    document.getElementById('UserType').addEventListener('change', function() {
+        document.getElementById('previewType').textContent = this.value;
+    });
+    document.getElementById('QuotaGB').addEventListener('input', function() {
+        document.getElementById('previewQuota').textContent = this.value || '0';
+    });
+    document.getElementById('DownloadSpeedKbps').addEventListener('input', function() {
+        document.getElementById('previewSpeed').textContent = Math.round((this.value || 10240) / 1024);
+    });
+</script>
+}

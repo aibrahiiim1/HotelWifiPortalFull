@@ -121,6 +121,9 @@ builder.Services.AddHostedService<WifiMonitoringService>();
 // PMS Auto-Posting Service (monitors PMS connection and posts pending payments)
 builder.Services.AddHostedService<PmsPostingService>();
 
+// Package Expiry Service (monitors time-based packages and disconnects expired users)
+builder.Services.AddHostedService<PackageExpiryService>();
+
 // SignalR
 builder.Services.AddSignalR();
 

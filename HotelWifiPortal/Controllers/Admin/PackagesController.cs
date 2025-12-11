@@ -282,6 +282,8 @@ namespace HotelWifiPortal.Controllers.Admin
                 DurationDays = model.DurationDays,
                 QuotaGB = model.QuotaGB,
                 SpeedLimitKbps = model.SpeedLimitKbps,
+                DownloadSpeedKbps = model.DownloadSpeedKbps,
+                UploadSpeedKbps = model.UploadSpeedKbps,
                 BadgeColor = model.BadgeColor,
                 SortOrder = model.SortOrder,
                 IsActive = model.IsActive,
@@ -293,7 +295,8 @@ namespace HotelWifiPortal.Controllers.Admin
             _dbContext.PaidPackages.Add(package);
             await _dbContext.SaveChangesAsync();
 
-            _logger.LogInformation("Paid package created: {Name}", package.Name);
+            _logger.LogInformation("Paid package created: {Name}, Speed: {Down}k/{Up}k, Quota: {Quota}GB", 
+                package.Name, package.DownloadSpeedKbps, package.UploadSpeedKbps, package.QuotaGB);
             TempData["Success"] = "Package created successfully.";
 
             return RedirectToAction(nameof(Paid));

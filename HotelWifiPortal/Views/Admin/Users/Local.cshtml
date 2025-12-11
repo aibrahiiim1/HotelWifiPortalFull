@@ -6,9 +6,20 @@
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-person-badge me-2"></i>Local Users</h2>
-    <a asp-action="CreateLocal" class="btn btn-primary">
-        <i class="bi bi-plus-lg me-2"></i>Add User
-    </a>
+    <div class="d-flex gap-2">
+        <form asp-action="SyncAllLocalUsers" method="post" class="d-inline">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-outline-success" onclick="return confirm('Sync all local users to FreeRADIUS?')">
+                <i class="bi bi-arrow-repeat me-2"></i>Sync to RADIUS
+            </button>
+        </form>
+        <a asp-action="BatchCreate" class="btn btn-outline-primary">
+            <i class="bi bi-people-fill me-2"></i>Batch Create
+        </a>
+        <a asp-action="CreateLocal" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-2"></i>Add User
+        </a>
+    </div>
 </div>
 
 @if (TempData["Success"] != null)
@@ -19,9 +30,26 @@
     </div>
 }
 
+@if (TempData["Warning"] != null)
+{
+    <div class="alert alert-warning alert-dismissible fade show">
+        <i class="bi bi-exclamation-triangle me-2"></i>@TempData["Warning"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-x-circle me-2"></i>@TempData["Error"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
 <div class="alert alert-info">
     <i class="bi bi-info-circle me-2"></i>
     <strong>Standalone Mode:</strong> Local users can authenticate to the WiFi portal when PMS integration is disabled or for guests without PMS reservations.
+    Click <strong>"Sync to RADIUS"</strong> to push all local users to FreeRADIUS.
 </div>
 
 <div class="card">
@@ -31,10 +59,10 @@
                 <thead class="table-light">
                     <tr>
                         <th>Username</th>
-                        <th>Full Name</th>
-                        <th>Room</th>
-                        <th>Email</th>
-                        <th>Usage</th>
+                        <th>Type</th>
+                        <th>Quota / Usage</th>
+                        <th>Speed</th>
+                        <th>Devices</th>
                         <th>Valid Until</th>
                         <th>Status</th>
                         <th>Actions</th>
@@ -45,22 +73,33 @@
                     {
                         @foreach (var user in Model)
                         {
-                            var usagePercent = user.QuotaGB > 0 ? (user.UsedQuotaBytes / (user.QuotaGB * 1073741824.0) * 100) : 0;
-                            <tr>
-                                <td><strong>@user.Username</strong></td>
-                                <td>@user.FullName</td>
-                                <td>@user.RoomNumber</td>
-                                <td>@user.Email</td>
-                                <td style="min-width: 150px;">
-                                    @if (user.QuotaGB > 0)
+                            var usagePercent = user.QuotaGB > 0 ? (user.UsedQuotaGB / user.QuotaGB * 100) : 0;
+                            var isExpired = user.ValidUntil.HasValue && user.ValidUntil.Value < DateTime.Now;
+                            <tr class="@(user.IsQuotaExceeded ? "table-danger" : isExpired ? "table-warning" : "")">
+                                <td>
+                                    <strong>@user.Username</strong>
+                                    @if (!string.IsNullOrEmpty(user.FullName))
                                     {
-                                        <div class="progress" style="height: 20px;">
-                                            <div class="progress-bar @(usagePercent > 90 ? "bg-danger" : usagePercent > 70 ? "bg-warning" : "bg-success")" 
-                                                 style="width: @usagePercent%;">
-                                                @((user.UsedQuotaBytes / 1073741824.0).ToString("N2")) GB
+                                        <br/><small class="text-muted">@user.FullName</small>
+                                    }
+                                </td>
+                                <td><span class="badge bg-secondary">@user.UserType</span></td>
+                                <td style="min-width: 180px;">
+                                    @if (user.QuotaBytes > 0)
+                                    {
+                                        <div class="progress mb-1" style="height: 18px;">
+                                            <div class="progress-bar @(usagePercent > 100 ? "bg-danger" : usagePercent > 80 ? "bg-warning" : "bg-success")" 
+                                                 style="width: @Math.Min(usagePercent, 100)%;">
+                                                @usagePercent.ToString("N0")%
                                             </div>
                                         </div>
-                                        <small class="text-muted">of @user.QuotaGB GB</small>
+                                        <small class="text-muted">
+                                            @user.UsedQuotaGB.ToString("N2") / @user.QuotaGB.ToString("N1") GB
+                                            @if (user.IsQuotaExceeded)
+                                            {
+                                                <span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i></span>
+                                            }
+                                        </small>
                                     }
                                     else
                                     {
@@ -68,16 +107,36 @@
                                     }
                                 </td>
                                 <td>
+                                    @if (user.DownloadSpeedKbps.HasValue || user.UploadSpeedKbps.HasValue)
+                                    {
+                                        <small>
+                                            <i class="bi bi-arrow-down text-success"></i> @((user.DownloadSpeedKbps ?? 0) / 1000)M
+                                            <br/>
+                                            <i class="bi bi-arrow-up text-primary"></i> @((user.UploadSpeedKbps ?? 0) / 1000)M
+                                        </small>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">-</span>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="badge @(user.CurrentDevices >= user.MaxDevices ? "bg-warning" : "bg-secondary")">
+                                        @user.CurrentDevices / @user.MaxDevices
+                                    </span>
+                                </td>
+                                <td>
                                     @if (user.ValidUntil.HasValue)
                                     {
-                                        if (user.ValidUntil.Value < DateTime.Now)
+                                        if (isExpired)
                                         {
                                             <span class="text-danger">@user.ValidUntil.Value.ToString("MMM dd, yyyy")</span>
-                                            <br /><small class="text-danger">Expired</small>
+                                            <br /><small class="badge bg-danger">Expired</small>
                                         }
                                         else
                                         {
                                             @user.ValidUntil.Value.ToString("MMM dd, yyyy")
+                                            <br/><small class="text-muted">@((user.ValidUntil.Value - DateTime.Now).Days) days left</small>
                                         }
                                     }
                                     else

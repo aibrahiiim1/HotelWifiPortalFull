@@ -80,9 +80,9 @@
                         <th>Guest</th>
                         <th>Usage</th>
                         <th>Quota Breakdown</th>
+                        <th>Paid Packages</th>
                         <th>Status</th>
                         <th>Devices</th>
-                        <th>Last Activity</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -114,11 +114,11 @@
                                     <span>@((room.UsedQuotaBytes / 1048576.0).ToString("N1")) MB</span>
                                 }
                             </td>
-                            <td style="min-width: 220px;">
+                            <td style="min-width: 200px;">
                                 @if (room.TotalQuotaBytes > 0)
                                 {
                                     <!-- Progress bar -->
-                                    <div class="progress mb-1" style="height: 20px;">
+                                    <div class="progress mb-1" style="height: 18px;">
                                         <div class="progress-bar @quotaBarColor" style="width: @Math.Min(quotaPercent, 100)%">
                                             @quotaPercent%
                                         </div>
@@ -136,7 +136,6 @@
                                     </div>
                                     <div class="small text-muted">
                                         Remaining: <span class="fw-semibold @(room.RemainingQuotaGB <= 0 ? "text-danger" : "")">@room.RemainingQuotaGB.ToString("N2") GB</span>
-                                        / @room.TotalQuotaGB.ToString("N1") GB
                                     </div>
                                 }
                                 else
@@ -144,17 +143,74 @@
                                     <span class="text-muted">No quota set</span>
                                 }
                             </td>
+                            <td style="min-width: 180px;">
+                                @if (room.ActivePaidPackages.Any())
+                                {
+                                    @foreach (var pkg in room.ActivePaidPackages)
+                                    {
+                                        var pkgClass = pkg.IsExpired ? "bg-secondary" :
+                                        pkg.PackageType == "TimeBased" ? "bg-info" :
+                                        pkg.PackageType == "RestOfStay" ? "bg-success" : "bg-primary";
+                                        <div class="mb-1">
+                                            <span class="badge @pkgClass">
+                                                @pkg.PackageName
+                                            </span>
+                                            @if (pkg.PackageType == "TimeBased")
+                                            {
+                                                @if (pkg.IsExpired)
+                                                {
+                                                    <br />
+                                
+                                                    <small class="text-danger"><i class="bi bi-clock-fill"></i> Expired</small>
+                                                }
+                                                else
+                                                {
+                                                    <br />
+                                
+                                                    <small class="text-info"><i class="bi bi-clock"></i> @pkg.RemainingTimeDisplay</small>
+                                                }
+                                            }
+                                            else if (pkg.PackageType == "RestOfStay")
+                                            {
+                                                <br />
+                                
+                                                <small class="text-success"><i class="bi bi-infinity"></i> Rest of Stay</small>
+                                            }
+                                            else if (pkg.PackageType == "DataBased" && pkg.QuotaGB > 0)
+                                            {
+                                                <br />
+                                
+                                                <small class="text-primary">
+                                                    <i class="bi bi-database"></i> @pkg.RemainingGB.ToString("N1")/@pkg.QuotaGB.ToString("N0") GB
+                                                </small>
+                                            }
+                                            @if (pkg.DownloadSpeedKbps.HasValue)
+                                            {
+                                                <br />
+                                
+                                                <small class="text-muted">
+                                                    <i class="bi bi-speedometer2"></i> @((pkg.DownloadSpeedKbps ?? 0) / 1000)M/@((pkg.UploadSpeedKbps ?? 0) / 1000)M
+                                                </small>
+                                            }
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="text-muted small">-</span>
+                                }
+                            </td>
                             <td>
                                 @if (room.IsQuotaExceeded)
                                 {
                                     <span class="badge bg-danger">
-                                        <i class="bi bi-exclamation-triangle-fill me-1"></i>Quota Exceeded
+                                        <i class="bi bi-exclamation-triangle-fill me-1"></i>Exceeded
                                     </span>
                                     @if (room.HasPurchasedPackage)
                                     {
                                         <br />
                                         <span class="badge bg-info mt-1">
-                                            <i class="bi bi-arrow-repeat me-1"></i>Paid Applied
+                                            <i class="bi bi-arrow-repeat me-1"></i>Upgraded
                                         </span>
                                     }
                                 }
@@ -178,9 +234,6 @@
                             <td>
                                 <span class="badge bg-secondary">@room.DeviceCount</span>
                             </td>
-                            <td>
-                                <small>@room.LastActivity.ToString("MMM dd HH:mm")</small>
-                            </td>
                         </tr>
                     }
                     @if (!Model.Any())
@@ -203,10 +256,11 @@
     <div class="card-body py-2">
         <div class="d-flex gap-4 flex-wrap align-items-center">
             <small class="text-muted"><strong>Legend:</strong></small>
-            <small><span class="badge bg-danger">Quota Exceeded</span> - Guest used all quota</small>
-            <small><span class="badge bg-warning text-dark"><i class="bi bi-star-fill"></i> Premium</span> - Purchased paid package</small>
-            <small><span class="badge bg-info"><i class="bi bi-arrow-repeat"></i> Paid Applied</span> - Upgraded after quota exceeded</small>
-            <small><span class="badge bg-success">Online</span> - Currently connected</small>
+            <small><span class="badge bg-danger">Exceeded</span> - Quota exceeded</small>
+            <small><span class="badge bg-info">Time-Based</span> - Package with time limit</small>
+            <small><span class="badge bg-success">Rest of Stay</span> - Valid until checkout</small>
+            <small><span class="badge bg-primary">Data-Based</span> - Package with data limit</small>
+            <small><i class="bi bi-clock text-info"></i> - Remaining time</small>
         </div>
     </div>
 </div>

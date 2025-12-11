@@ -16,15 +16,18 @@ namespace HotelWifiPortal.Controllers.Admin
     {
         private readonly ApplicationDbContext _dbContext;
         private readonly WifiService _wifiService;
+        private readonly FreeRadiusService _freeRadiusService;
         private readonly ILogger<SessionsController> _logger;
 
         public SessionsController(
             ApplicationDbContext dbContext,
             WifiService wifiService,
+            FreeRadiusService freeRadiusService,
             ILogger<SessionsController> logger)
         {
             _dbContext = dbContext;
             _wifiService = wifiService;
+            _freeRadiusService = freeRadiusService;
             _logger = logger;
         }
 
@@ -105,8 +108,20 @@ namespace HotelWifiPortal.Controllers.Admin
 
             var guests = await guestQuery.ToListAsync();
 
+            // Get active paid packages for all guests
+            var guestIds = guests.Select(g => g.Id).ToList();
+            var activePaidPackages = await _dbContext.GuestPaidPackages
+                .Where(p => guestIds.Contains(p.GuestId) && p.Status == "Active")
+                .ToListAsync();
+
+            var packagesByGuestId = activePaidPackages
+                .GroupBy(p => p.GuestId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
             var roomUsageList = guests.Select(g => {
                 var stats = sessionStats.ContainsKey(g.RoomNumber) ? sessionStats[g.RoomNumber] : null;
+                var guestPackages = packagesByGuestId.ContainsKey(g.Id) ? packagesByGuestId[g.Id] : new List<GuestPaidPackage>();
+
                 return new RoomUsageViewModel
                 {
                     RoomNumber = g.RoomNumber,
@@ -128,7 +143,21 @@ namespace HotelWifiPortal.Controllers.Admin
                     IsQuotaExceeded = g.IsQuotaExhausted,
                     HasPurchasedPackage = g.HasPurchasedPackage,
                     GuestStatus = g.Status,
-                    QuotaExceededSessions = stats?.QuotaExceededSessions ?? 0
+                    QuotaExceededSessions = stats?.QuotaExceededSessions ?? 0,
+                    // Active paid packages
+                    ActivePaidPackages = guestPackages.Select(p => new ActivePaidPackageInfo
+                    {
+                        Id = p.Id,
+                        PackageName = p.PackageName,
+                        PackageType = p.PackageType,
+                        QuotaGB = p.QuotaGB,
+                        UsedGB = p.UsedGB,
+                        DownloadSpeedKbps = p.DownloadSpeedKbps,
+                        UploadSpeedKbps = p.UploadSpeedKbps,
+                        ActivatedAt = p.ActivatedAt,
+                        ExpiresAt = p.ExpiresAt,
+                        Status = p.Status
+                    }).ToList()
                 };
             })
             .OrderByDescending(r => r.TotalBytesUsed)
@@ -465,33 +494,40 @@ namespace HotelWifiPortal.Controllers.Admin
         // Helper: Disconnect MAC from network via CoA
         private async Task DisconnectMacFromNetwork(string macAddress, string? radiusSessionId)
         {
-            var settings = await _dbContext.SystemSettings.ToListAsync();
-            var mikrotikIp = settings.FirstOrDefault(s => s.Key == "MikrotikIpAddress")?.Value;
+            _logger.LogInformation("Disconnecting MAC {Mac} from network via CoA", macAddress);
 
-            // Try to get MikroTik IP from WifiControllerSettings if not in SystemSettings
-            if (string.IsNullOrEmpty(mikrotikIp))
-            {
-                var wifiSettings = await _dbContext.WifiControllerSettings
-                    .FirstOrDefaultAsync(w => w.ControllerType == "Mikrotik" && w.IsEnabled);
-                mikrotikIp = wifiSettings?.IpAddress;
-            }
+            // Find the username associated with this MAC address from active session
+            var session = await _dbContext.WifiSessions
+                .FirstOrDefaultAsync(s => s.MacAddress == macAddress && s.Status == "Active");
 
-            if (!string.IsNullOrEmpty(mikrotikIp))
+            if (session != null && !string.IsNullOrEmpty(session.RoomNumber))
             {
-                // Use CoA to disconnect
-                var radiusServer = HttpContext.RequestServices.GetService<RadiusServer>();
-                if (radiusServer != null)
+                // Use FreeRadiusService to send CoA disconnect via FreeRADIUS to MikroTik
+                var success = await _freeRadiusService.DisconnectUserByUsernameAsync(session.RoomNumber);
+                if (success)
                 {
-                    await radiusServer.DisconnectUserAsync(mikrotikIp, macAddress, radiusSessionId ?? "");
-                    _logger.LogInformation("Sent CoA disconnect for MAC {Mac}", macAddress);
+                    _logger.LogInformation("CoA disconnect sent successfully for MAC {Mac}, Room {Room}",
+                        macAddress, session.RoomNumber);
+                }
+                else
+                {
+                    _logger.LogWarning("CoA disconnect failed for MAC {Mac}, trying alternative methods", macAddress);
                 }
             }
 
-            // Also try MikroTik REST API
+            // Also try MikroTik REST API as fallback
             var controller = _wifiService.GetController("Mikrotik");
             if (controller != null)
             {
-                await controller.DisconnectUserAsync(macAddress);
+                try
+                {
+                    await controller.DisconnectUserAsync(macAddress);
+                    _logger.LogInformation("MikroTik API disconnect sent for MAC {Mac}", macAddress);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "MikroTik API disconnect failed for MAC {Mac}", macAddress);
+                }
             }
         }
 
@@ -886,11 +922,51 @@ namespace HotelWifiPortal.Controllers.Admin
         public string? GuestStatus { get; set; }
         public int QuotaExceededSessions { get; set; }
 
+        // Active paid packages for this guest
+        public List<ActivePaidPackageInfo> ActivePaidPackages { get; set; } = new();
+
         // Computed properties
         public double FreeQuotaGB => FreeQuotaBytes / 1073741824.0;
         public double PaidQuotaGB => PaidQuotaBytes / 1073741824.0;
         public double TotalQuotaGB => TotalQuotaBytes / 1073741824.0;
         public double UsedQuotaGB => UsedQuotaBytes / 1073741824.0;
         public double RemainingQuotaGB => Math.Max(0, TotalQuotaGB - UsedQuotaGB);
+    }
+
+    public class ActivePaidPackageInfo
+    {
+        public int Id { get; set; }
+        public string PackageName { get; set; } = "";
+        public string PackageType { get; set; } = "DataBased";
+        public double QuotaGB { get; set; }
+        public double UsedGB { get; set; }
+        public double RemainingGB => Math.Max(0, QuotaGB - UsedGB);
+        public int QuotaPercent => QuotaGB > 0 ? (int)((UsedGB / QuotaGB) * 100) : 0;
+        public int? DownloadSpeedKbps { get; set; }
+        public int? UploadSpeedKbps { get; set; }
+        public DateTime ActivatedAt { get; set; }
+        public DateTime? ExpiresAt { get; set; }
+        public string Status { get; set; } = "Active";
+
+        public bool IsExpired => ExpiresAt.HasValue && DateTime.UtcNow > ExpiresAt.Value;
+        public bool IsActive => Status == "Active" && !IsExpired;
+
+        public string RemainingTimeDisplay
+        {
+            get
+            {
+                if (PackageType == "RestOfStay") return "Rest of Stay";
+                if (PackageType == "DataBased") return "Data-based";
+                if (!ExpiresAt.HasValue) return "N/A";
+                if (IsExpired) return "Expired";
+
+                var remaining = ExpiresAt.Value - DateTime.UtcNow;
+                if (remaining.TotalDays >= 1)
+                    return $"{(int)remaining.TotalDays}d {remaining.Hours}h";
+                if (remaining.TotalHours >= 1)
+                    return $"{(int)remaining.TotalHours}h {remaining.Minutes}m";
+                return $"{remaining.Minutes}m";
+            }
+        }
     }
 }

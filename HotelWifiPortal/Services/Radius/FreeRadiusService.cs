@@ -1256,6 +1256,289 @@ namespace HotelWifiPortal.Services.Radius
         }
 
         /// <summary>
+        /// Sync all active LocalUsers to FreeRADIUS
+        /// </summary>
+        public async Task SyncAllLocalUsersAsync()
+        {
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+            {
+                _logger.LogWarning("SyncAllLocalUsersAsync: FreeRADIUS not enabled or no connection string");
+                return;
+            }
+
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+                var localUsers = await dbContext.LocalUsers
+                    .Where(u => u.IsActive &&
+                               (!u.ValidUntil.HasValue || u.ValidUntil.Value > DateTime.UtcNow))
+                    .ToListAsync();
+
+                _logger.LogInformation("SyncAllLocalUsersAsync: Found {Count} active local users to sync", localUsers.Count);
+
+                int successCount = 0;
+                foreach (var user in localUsers)
+                {
+                    var result = await CreateOrUpdateLocalUserAsync(user);
+                    if (result) successCount++;
+                }
+
+                _logger.LogInformation("Synced {SuccessCount}/{TotalCount} local users to FreeRADIUS", successCount, localUsers.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing local users to FreeRADIUS");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Create or update a LocalUser in FreeRADIUS
+        /// </summary>
+        public async Task<bool> CreateOrUpdateLocalUserAsync(LocalUser user)
+        {
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+            {
+                _logger.LogDebug("FreeRADIUS not enabled for local user sync");
+                return false;
+            }
+
+            try
+            {
+                var username = user.Username;
+                var password = user.PasswordHash; // This should be the clear-text password or we need to handle differently
+
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Calculate session timeout based on ValidUntil
+                int sessionTimeout = 86400; // Default 24 hours
+                if (user.ValidUntil.HasValue)
+                {
+                    sessionTimeout = Math.Max(0, (int)(user.ValidUntil.Value - DateTime.UtcNow).TotalSeconds);
+                }
+
+                // Calculate quota
+                long quotaBytes = user.QuotaBytes;
+                if (quotaBytes == 0)
+                {
+                    quotaBytes = 100L * 1024 * 1024 * 1024 * 1024; // 100TB = unlimited
+                }
+
+                // Get speeds (default 10M/5M if not set)
+                int downloadKbps = user.DownloadSpeedKbps ?? 10240;
+                int uploadKbps = user.UploadSpeedKbps ?? 5120;
+
+                _logger.LogInformation("Syncing LocalUser {Username}: Quota={QuotaGB}GB, Session={Session}s, Speed={Down}k/{Up}k",
+                    username, quotaBytes / 1073741824.0, sessionTimeout, downloadKbps, uploadKbps);
+
+                // ============================================
+                // RADCHECK - Authentication
+                // ============================================
+                // Delete existing entries first
+                var deleteSql = $"DELETE FROM {_tablePrefix}check WHERE username = @username";
+                using (var cmd = new MySqlCommand(deleteSql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // Insert Cleartext-Password
+                var insertCheckSql = $@"INSERT INTO {_tablePrefix}check (username, attribute, op, value) 
+                                        VALUES (@username, @attribute, ':=', @value)";
+
+                // Cleartext password
+                using (var cmd = new MySqlCommand(insertCheckSql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "Cleartext-Password");
+                    cmd.Parameters.AddWithValue("@value", password);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // NT-Password for MSCHAP
+                var ntHash = ComputeNtHash(password);
+                using (var cmd = new MySqlCommand(insertCheckSql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "NT-Password");
+                    cmd.Parameters.AddWithValue("@value", ntHash);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // Max-Total-Data for quota enforcement
+                using (var cmd = new MySqlCommand(insertCheckSql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "Max-Total-Data");
+                    cmd.Parameters.AddWithValue("@value", quotaBytes.ToString());
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // ============================================
+                // RADREPLY - Reply attributes
+                // ============================================
+                var deleteReplySql = $"DELETE FROM {_tablePrefix}reply WHERE username = @username";
+                using (var cmd = new MySqlCommand(deleteReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                var insertReplySql = $@"INSERT INTO {_tablePrefix}reply (username, attribute, op, value) 
+                                        VALUES (@username, @attribute, @op, @value)";
+
+                // Session-Timeout
+                using (var cmd = new MySqlCommand(insertReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "Session-Timeout");
+                    cmd.Parameters.AddWithValue("@op", ":=");
+                    cmd.Parameters.AddWithValue("@value", sessionTimeout.ToString());
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // Idle-Timeout
+                using (var cmd = new MySqlCommand(insertReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "Idle-Timeout");
+                    cmd.Parameters.AddWithValue("@op", ":=");
+                    cmd.Parameters.AddWithValue("@value", "1800");
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // Acct-Interim-Interval
+                using (var cmd = new MySqlCommand(insertReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "Acct-Interim-Interval");
+                    cmd.Parameters.AddWithValue("@op", ":=");
+                    cmd.Parameters.AddWithValue("@value", "300");
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // Reply-Message
+                using (var cmd = new MySqlCommand(insertReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "Reply-Message");
+                    cmd.Parameters.AddWithValue("@op", "=");
+                    cmd.Parameters.AddWithValue("@value", $"Welcome {user.FullName ?? username}!");
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // Mikrotik-Rate-Limit
+                var rateLimit = $"{downloadKbps}k/{uploadKbps}k";
+                using (var cmd = new MySqlCommand(insertReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "Mikrotik-Rate-Limit");
+                    cmd.Parameters.AddWithValue("@op", ":=");
+                    cmd.Parameters.AddWithValue("@value", rateLimit);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // WISPr-Bandwidth-Max-Up
+                using (var cmd = new MySqlCommand(insertReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "WISPr-Bandwidth-Max-Up");
+                    cmd.Parameters.AddWithValue("@op", ":=");
+                    cmd.Parameters.AddWithValue("@value", (uploadKbps * 1000).ToString());
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // WISPr-Bandwidth-Max-Down
+                using (var cmd = new MySqlCommand(insertReplySql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@attribute", "WISPr-Bandwidth-Max-Down");
+                    cmd.Parameters.AddWithValue("@op", ":=");
+                    cmd.Parameters.AddWithValue("@value", (downloadKbps * 1000).ToString());
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // ============================================
+                // RADUSERGROUP - Group membership
+                // ============================================
+                var deleteGroupSql = $"DELETE FROM {_tablePrefix}usergroup WHERE username = @username";
+                using (var cmd = new MySqlCommand(deleteGroupSql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                // Add to appropriate group based on user type
+                var groupName = user.UserType?.ToLower() switch
+                {
+                    "staff" => "staff",
+                    "conference" => "conference",
+                    "visitor" => "visitors",
+                    _ => "local-users"
+                };
+
+                var insertGroupSql = $@"INSERT INTO {_tablePrefix}usergroup (username, groupname, priority) 
+                                        VALUES (@username, @groupname, 1)";
+                using (var cmd = new MySqlCommand(insertGroupSql, connection))
+                {
+                    cmd.Parameters.AddWithValue("@username", username);
+                    cmd.Parameters.AddWithValue("@groupname", groupName);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                _logger.LogInformation("Successfully synced LocalUser {Username} to FreeRADIUS", username);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing LocalUser {Username} to FreeRADIUS", user.Username);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Delete a LocalUser from FreeRADIUS
+        /// </summary>
+        public async Task<bool> DeleteLocalUserAsync(string username)
+        {
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+                return false;
+
+            try
+            {
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Delete from all tables
+                var tables = new[] { "check", "reply", "usergroup" };
+                foreach (var table in tables)
+                {
+                    var sql = $"DELETE FROM {_tablePrefix}{table} WHERE username = @username";
+                    using var cmd = new MySqlCommand(sql, connection);
+                    cmd.Parameters.AddWithValue("@username", username);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                _logger.LogInformation("Deleted LocalUser {Username} from FreeRADIUS", username);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting LocalUser {Username} from FreeRADIUS", username);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Clear ALL Mikrotik-Total-Limit entries from radreply table
         /// This forces room-level quota enforcement by the portal instead of per-device by MikroTik
         /// </summary>

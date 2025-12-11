@@ -61,28 +61,41 @@ namespace HotelWifiPortal.Services
 
         public async Task<bool> AddPaidQuotaAsync(Guest guest, PaidPackage package)
         {
+            // Calculate quota based on package type
+            long quotaToAdd = 0;
+            
             if (package.PackageType == "DataBased" && package.QuotaBytes.HasValue)
             {
-                guest.PaidQuotaBytes += package.QuotaBytes.Value;
+                // Data-based: use exact quota from package
+                quotaToAdd = package.QuotaBytes.Value;
             }
             else if (package.PackageType == "RestOfStay")
             {
-                // Give unlimited quota (very large number)
-                guest.PaidQuotaBytes = 100L * 1024 * 1024 * 1024 * 1024; // 100 TB
+                // Rest of stay: give unlimited quota (very large number)
+                quotaToAdd = 100L * 1024 * 1024 * 1024 * 1024; // 100 TB
             }
             else if (package.PackageType == "TimeBased")
             {
-                // For time-based, we track separately or give temporary unlimited
-                guest.PaidQuotaBytes += 50L * 1024 * 1024 * 1024; // 50 GB for time-based
+                // Time-based: use package quota if set, otherwise give generous amount
+                if (package.QuotaBytes.HasValue && package.QuotaBytes.Value > 0)
+                {
+                    quotaToAdd = package.QuotaBytes.Value;
+                }
+                else
+                {
+                    // No quota specified, give unlimited for time-based
+                    quotaToAdd = 100L * 1024 * 1024 * 1024 * 1024; // 100 TB
+                }
             }
 
+            guest.PaidQuotaBytes += quotaToAdd;
             guest.HasPurchasedPackage = true;
             guest.UpdatedAt = DateTime.UtcNow;
 
             await _dbContext.SaveChangesAsync();
             
-            _logger.LogInformation("Added paid quota for Room {Room}: Package={Package}, NewTotal={Total}GB",
-                guest.RoomNumber, package.Name, guest.TotalQuotaGB);
+            _logger.LogInformation("Added paid quota for Room {Room}: Package={Package}, QuotaAdded={QuotaGB}GB, NewTotal={Total}GB",
+                guest.RoomNumber, package.Name, quotaToAdd / 1073741824.0, guest.TotalQuotaGB);
 
             // Update FreeRADIUS radreply with new quota limit
             await UpdateFreeRadiusQuotaAsync(guest);

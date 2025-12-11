@@ -1,0 +1,117 @@
+@model List<(string Username, string Password)>
+@{
+    ViewData["Title"] = "Batch Creation Results";
+    Layout = "~/Views/Shared/_AdminLayout.cshtml";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-check-circle-fill text-success me-2"></i>Users Created Successfully</h2>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary" onclick="printCredentials()">
+            <i class="bi bi-printer me-2"></i>Print
+        </button>
+        <button class="btn btn-outline-success" onclick="copyToClipboard()">
+            <i class="bi bi-clipboard me-2"></i>Copy All
+        </button>
+        <a asp-action="Local" class="btn btn-primary">
+            <i class="bi bi-arrow-left me-2"></i>Back to Users
+        </a>
+    </div>
+</div>
+
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    <strong>Important:</strong> Save these credentials now! Passwords cannot be recovered after leaving this page.
+</div>
+
+<div class="card" id="credentialsCard">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Created @Model?.Count Users</h5>
+        <span class="badge bg-success">Ready to Use</span>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-striped" id="credentialsTable">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Username</th>
+                        <th>Password</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model != null)
+                    {
+                        var i = 1;
+                        @foreach (var user in Model)
+                        {
+                            <tr>
+                                <td>@i</td>
+                                <td><strong>@user.Username</strong></td>
+                                <td><code class="fs-5">@user.Password</code></td>
+                            </tr>
+                            i++;
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Print-friendly version (hidden) -->
+<div id="printArea" style="display: none;">
+    <h2 style="text-align: center; margin-bottom: 20px;">WiFi User Credentials</h2>
+    <p style="text-align: center; margin-bottom: 20px;">Generated: @DateTime.Now.ToString("MMMM dd, yyyy HH:mm")</p>
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="border: 1px solid #000; padding: 8px; text-align: left;">#</th>
+                <th style="border: 1px solid #000; padding: 8px; text-align: left;">Username</th>
+                <th style="border: 1px solid #000; padding: 8px; text-align: left;">Password</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Model != null)
+            {
+                var j = 1;
+                @foreach (var user in Model)
+                {
+                    <tr>
+                        <td style="border: 1px solid #000; padding: 8px;">@j</td>
+                        <td style="border: 1px solid #000; padding: 8px;"><strong>@user.Username</strong></td>
+                        <td style="border: 1px solid #000; padding: 8px; font-family: monospace;">@user.Password</td>
+                    </tr>
+                    j++;
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@section Scripts {
+<script>
+function printCredentials() {
+    var printContent = document.getElementById('printArea').innerHTML;
+    var originalContent = document.body.innerHTML;
+    document.body.innerHTML = printContent;
+    window.print();
+    document.body.innerHTML = originalContent;
+    location.reload();
+}
+
+function copyToClipboard() {
+    var table = document.getElementById('credentialsTable');
+    var text = "Username\tPassword\n";
+    var rows = table.querySelectorAll('tbody tr');
+    rows.forEach(function(row) {
+        var cells = row.querySelectorAll('td');
+        text += cells[1].textContent.trim() + "\t" + cells[2].textContent.trim() + "\n";
+    });
+    
+    navigator.clipboard.writeText(text).then(function() {
+        alert('Credentials copied to clipboard!');
+    });
+}
+</script>
+}

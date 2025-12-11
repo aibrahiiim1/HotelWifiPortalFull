@@ -44,6 +44,22 @@ namespace HotelWifiPortal.Services
             _logger.LogInformation("Guest: {Name} (Room {Room})", guest.GuestName, guest.RoomNumber);
             _logger.LogInformation("Package: {Package}, Price: {Currency} {Price}", package.Name, package.Currency, package.Price);
 
+            // Calculate expiry time for time-based packages
+            DateTime? expiresAt = null;
+            var activatedAt = DateTime.UtcNow;
+
+            if (package.PackageType == "TimeBased")
+            {
+                if (package.DurationHours.HasValue)
+                {
+                    expiresAt = activatedAt.AddHours(package.DurationHours.Value);
+                }
+                else if (package.DurationDays.HasValue)
+                {
+                    expiresAt = activatedAt.AddDays(package.DurationDays.Value);
+                }
+            }
+
             // Create transaction
             var transaction = new PaymentTransaction
             {
@@ -56,17 +72,46 @@ namespace HotelWifiPortal.Services
                 Amount = package.Price,
                 Currency = package.Currency,
                 DurationHours = package.DurationHours ?? (package.DurationDays.HasValue ? package.DurationDays.Value * 24 : null),
+                DurationDays = package.DurationDays,
                 QuotaGB = package.QuotaGB,
+                PackageType = package.PackageType,
+                ActivatedAt = activatedAt,
+                ExpiresAt = expiresAt,
                 Status = "Pending"
             };
 
             _dbContext.PaymentTransactions.Add(transaction);
             await _dbContext.SaveChangesAsync();
 
-            _logger.LogInformation("Transaction created: {TransactionId}", transaction.TransactionId);
+            _logger.LogInformation("Transaction created: {TransactionId}, Type: {Type}, Expires: {Expires}",
+                transaction.TransactionId, package.PackageType, expiresAt?.ToString("g") ?? "N/A");
 
             try
             {
+                // Create GuestPaidPackage record for tracking
+                var guestPackage = new GuestPaidPackage
+                {
+                    GuestId = guestId,
+                    PaidPackageId = packageId,
+                    TransactionId = transaction.Id,
+                    RoomNumber = guest.RoomNumber,
+                    PackageName = package.Name,
+                    PackageType = package.PackageType,
+                    QuotaBytes = package.QuotaBytes ?? 0,
+                    UsedBytes = 0,
+                    DownloadSpeedKbps = package.DownloadSpeedKbps ?? package.SpeedLimitKbps,
+                    UploadSpeedKbps = package.UploadSpeedKbps ?? package.SpeedLimitKbps,
+                    ActivatedAt = activatedAt,
+                    ExpiresAt = expiresAt,
+                    Status = "Active"
+                };
+
+                _dbContext.GuestPaidPackages.Add(guestPackage);
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("GuestPaidPackage created: ID={Id}, Package={Name}, Expires={Expires}",
+                    guestPackage.Id, guestPackage.PackageName, guestPackage.RemainingTimeDisplay);
+
                 // Add quota to guest
                 await _quotaService.AddPaidQuotaAsync(guest, package);
                 _logger.LogInformation("Quota added to guest. New total: {Total}GB", guest.TotalQuotaGB);

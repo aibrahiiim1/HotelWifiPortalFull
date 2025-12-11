@@ -13,25 +13,20 @@
         <div class="card">
             <div class="card-body">
                 <form asp-action="CreateLocal" method="post">
+                    <h6 class="text-muted mb-3">Account Information</h6>
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Username <span class="text-danger">*</span></label>
                             <input type="text" class="form-control" asp-for="Username" required />
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Room Number</label>
-                            <input type="text" class="form-control" asp-for="RoomNumber" />
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Full Name</label>
-                            <input type="text" class="form-control" asp-for="FullName" />
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Email</label>
-                            <input type="email" class="form-control" asp-for="Email" />
+                            <label class="form-label">User Type</label>
+                            <select asp-for="UserType" class="form-select">
+                                <option value="Guest">Guest</option>
+                                <option value="Visitor">Visitor</option>
+                                <option value="Staff">Staff</option>
+                                <option value="Conference">Conference</option>
+                            </select>
                         </div>
                     </div>
 
@@ -48,13 +43,53 @@
 
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Quota (GB)</label>
-                            <input type="number" class="form-control" asp-for="QuotaGB" min="0" step="0.1" placeholder="Leave empty for unlimited" />
+                            <label class="form-label">Full Name</label>
+                            <input type="text" class="form-control" asp-for="FullName" />
                         </div>
                         <div class="col-md-6 mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" asp-for="Email" />
+                        </div>
+                    </div>
+
+                    <hr class="my-4" />
+                    <h6 class="text-muted mb-3">Quota & Speed Limits</h6>
+                    
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Quota (GB)</label>
+                            <input type="number" class="form-control" asp-for="QuotaGB" min="0" step="0.5" />
+                            <small class="text-muted">0 = Unlimited</small>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Download Speed (Kbps)</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" asp-for="DownloadSpeedKbps" min="0" />
+                                <span class="input-group-text">Kbps</span>
+                            </div>
+                            <small class="text-muted">10240 = 10 Mbps</small>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Upload Speed (Kbps)</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" asp-for="UploadSpeedKbps" min="0" />
+                                <span class="input-group-text">Kbps</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Max Devices</label>
+                            <input type="number" class="form-control" asp-for="MaxDevices" min="1" max="10" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Valid From</label>
+                            <input type="date" class="form-control" asp-for="ValidFrom" />
+                        </div>
+                        <div class="col-md-4 mb-3">
                             <label class="form-label">Valid Until</label>
                             <input type="date" class="form-control" asp-for="ValidUntil" />
-                            <small class="text-muted">Leave empty for no expiry</small>
                         </div>
                     </div>
 

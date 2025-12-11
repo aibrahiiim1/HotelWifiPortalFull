@@ -8,18 +8,18 @@ namespace HotelWifiPortal.Models.ViewModels
     public class GuestEditViewModel
     {
         public Guest Guest { get; set; } = new();
-
+        
         // For dropdowns
         public List<SelectListItem> FreePackages { get; set; } = new();
         public List<SelectListItem> BandwidthProfiles { get; set; } = new();
-
+        
         // Selected values
         public int? SelectedFreePackageId { get; set; }
         public int? SelectedBandwidthProfileId { get; set; }
-
+        
         // Manual quota override
         public double TotalQuotaGB { get; set; }
-
+        
         // Reset usage option
         public bool ResetUsage { get; set; }
     }
@@ -42,7 +42,7 @@ namespace HotelWifiPortal.Models.ViewModels
         public string? LinkLogin { get; set; }      // MikroTik login URL
         public string? LinkOrig { get; set; }       // Original destination
         public string? SSID { get; set; }
-
+        
         public string? ErrorMessage { get; set; }
     }
 
@@ -54,25 +54,25 @@ namespace HotelWifiPortal.Models.ViewModels
         public int GuestId { get; set; }
         public string RoomNumber { get; set; } = string.Empty;
         public string GuestName { get; set; } = string.Empty;
-
+        
         [Required(ErrorMessage = "Password is required")]
         [MinLength(5, ErrorMessage = "Password must be at least 5 digits")]
         [MaxLength(20, ErrorMessage = "Password cannot exceed 20 digits")]
         [RegularExpression(@"^\d+$", ErrorMessage = "Password must contain only numbers (no letters or special characters)")]
         [Display(Name = "New WiFi Password")]
         public string NewPassword { get; set; } = string.Empty;
-
+        
         [Required(ErrorMessage = "Please confirm your password")]
         [Compare("NewPassword", ErrorMessage = "Passwords do not match")]
         [Display(Name = "Confirm Password")]
         public string ConfirmPassword { get; set; } = string.Empty;
-
+        
         // Pass through MikroTik parameters
         public string? MacAddress { get; set; }
         public string? ClientIp { get; set; }
         public string? LinkLogin { get; set; }
         public string? LinkOrig { get; set; }
-
+        
         public string? ErrorMessage { get; set; }
     }
 
@@ -136,7 +136,7 @@ namespace HotelWifiPortal.Models.ViewModels
         public string PmsStatus { get; set; } = "disconnected";
         public int MessagesSent { get; set; }
         public int MessagesReceived { get; set; }
-
+        
         // Pending PMS Postings
         public int PendingPmsPostings { get; set; }
         public decimal PendingPmsAmount { get; set; }
@@ -202,11 +202,11 @@ namespace HotelWifiPortal.Models.ViewModels
         public int? SpeedLimitKbps { get; set; }
         public int? DownloadSpeedKbps { get; set; }
         public int? UploadSpeedKbps { get; set; }
-
+        
         // Max devices
         [Range(1, 20)]
         public int MaxDevices { get; set; } = 3;
-
+        
         // Sharing options
         public bool SharedUsage { get; set; } = true;
         public bool SharedBandwidth { get; set; } = true;
@@ -215,10 +215,10 @@ namespace HotelWifiPortal.Models.ViewModels
         public string BadgeColor { get; set; } = "primary";
 
         public int SortOrder { get; set; }
-
+        
         // Alias for views that use DisplayOrder
         public int DisplayOrder { get => SortOrder; set => SortOrder = value; }
-
+        
         public bool IsActive { get; set; } = true;
     }
 
@@ -245,16 +245,16 @@ namespace HotelWifiPortal.Models.ViewModels
         public int? DurationHours { get; set; }
         public int? DurationDays { get; set; }
         public double? QuotaGB { get; set; }
-
+        
         // Speed limits
         public int? SpeedLimitKbps { get; set; }
         public int? DownloadSpeedKbps { get; set; }
         public int? UploadSpeedKbps { get; set; }
-
+        
         // Max devices
         [Range(1, 20)]
         public int MaxDevices { get; set; } = 5;
-
+        
         // Sharing options
         public bool SharedUsage { get; set; } = true;
         public bool SharedBandwidth { get; set; } = true;
@@ -263,10 +263,10 @@ namespace HotelWifiPortal.Models.ViewModels
         public string BadgeColor { get; set; } = "success";
 
         public int SortOrder { get; set; }
-
+        
         // Alias for views that use DisplayOrder
         public int DisplayOrder { get => SortOrder; set => SortOrder = value; }
-
+        
         public bool IsActive { get; set; } = true;
         public bool IsFeatured { get; set; }
     }
@@ -334,7 +334,7 @@ namespace HotelWifiPortal.Models.ViewModels
         public bool IgnoreSslErrors { get; set; } = true;  // Default to ignore
         public bool IsEnabled { get; set; } = true;  // Default to enabled
         public bool IsDefault { get; set; } = false;
-
+        
         // Status (read-only, for display)
         public string? ConnectionStatus { get; set; }
         public DateTime? LastConnectionTest { get; set; }
@@ -437,29 +437,79 @@ namespace HotelWifiPortal.Models.ViewModels
         public string? RoomNumber { get; set; }
 
         public double QuotaGB { get; set; }
+        
+        // Speed limits (Kbps)
+        [Display(Name = "Download Speed (Kbps)")]
+        public int? DownloadSpeedKbps { get; set; }
+        
+        [Display(Name = "Upload Speed (Kbps)")]
+        public int? UploadSpeedKbps { get; set; }
+        
+        // Device limits
+        [Display(Name = "Max Devices")]
+        [Range(1, 10)]
+        public int MaxDevices { get; set; } = 3;
 
         public DateTime? ValidFrom { get; set; }
         public DateTime? ValidUntil { get; set; }
 
         public bool IsActive { get; set; } = true;
     }
+    
+    public class BatchLocalUserViewModel
+    {
+        [Required]
+        [MaxLength(50)]
+        [Display(Name = "Username Prefix")]
+        public string UsernamePrefix { get; set; } = "user";
+        
+        [Required]
+        [Range(1, 100)]
+        [Display(Name = "Number of Users")]
+        public int Count { get; set; } = 10;
+        
+        [Required]
+        [Range(4, 20)]
+        [Display(Name = "Password Length")]
+        public int PasswordLength { get; set; } = 8;
+        
+        [MaxLength(50)]
+        public string UserType { get; set; } = "Guest";
+        
+        public double QuotaGB { get; set; } = 5;
+        
+        [Display(Name = "Download Speed (Kbps)")]
+        public int? DownloadSpeedKbps { get; set; } = 10240;
+        
+        [Display(Name = "Upload Speed (Kbps)")]
+        public int? UploadSpeedKbps { get; set; } = 5120;
+        
+        [Display(Name = "Max Devices")]
+        [Range(1, 10)]
+        public int MaxDevices { get; set; } = 3;
+        
+        public DateTime? ValidFrom { get; set; }
+        public DateTime? ValidUntil { get; set; }
+        
+        public bool IsActive { get; set; } = true;
+    }
 
     public class LogsViewModel
     {
         public List<SystemLog> Logs { get; set; } = new();
-
+        
         // Properties used by the new views
         public string? Level { get; set; }
         public string? Category { get; set; }
         public string? Search { get; set; }
         public int Page { get; set; } = 1;
-
+        
         // Properties for backward compatibility with old code
         public string? LevelFilter { get => Level; set => Level = value; }
         public string? CategoryFilter { get => Category; set => Category = value; }
         public string? SearchTerm { get => Search; set => Search = value; }
         public int PageNumber { get => Page; set => Page = value; }
-
+        
         public DateTime? FromDate { get; set; }
         public DateTime? ToDate { get; set; }
         public int TotalCount { get; set; }
@@ -470,37 +520,37 @@ namespace HotelWifiPortal.Models.ViewModels
     public class SystemSettingsViewModel
     {
         public string HotelName { get; set; } = string.Empty;
-
+        
         // Properties used by the new views
         public string? LogoUrl { get; set; }
         public int MaxDevicesPerRoom { get; set; } = 5;
-
+        
         // Properties for backward compatibility with old code
         public string? HotelLogo { get => LogoUrl; set => LogoUrl = value; }
         public int MaxDevicesPerGuest { get => MaxDevicesPerRoom; set => MaxDevicesPerRoom = value; }
         public bool EnableStandaloneMode { get; set; }
         public string DefaultLanguage { get; set; } = "en";
         public string TimeZone { get; set; } = "UTC";
-
+        
         public string? WelcomeMessage { get; set; }
         public string? SupportEmail { get; set; }
         public string? SupportPhone { get; set; }
         public int SessionTimeoutMinutes { get; set; } = 1440;
-
+        
         public int? DefaultBandwidthProfileId { get; set; }
         public List<BandwidthProfile>? BandwidthProfiles { get; set; }
-
+        
         public bool RequireTermsAcceptance { get; set; }
         public bool AllowGuestRegistration { get; set; }
         public bool EnablePaywall { get; set; } = true;
         public bool EnableBandwidthLimiting { get; set; } = true;
-
+        
         /// <summary>
         /// When enabled, guests must set a new WiFi password on first login.
         /// When disabled, guests can login directly with their reservation number.
         /// </summary>
         public bool RequirePasswordResetOnFirstLogin { get; set; } = true;
-
+        
         public string? TermsAndConditions { get; set; }
     }
 }
