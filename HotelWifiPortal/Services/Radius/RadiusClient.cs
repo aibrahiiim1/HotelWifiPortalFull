@@ -369,4 +369,367 @@ namespace HotelWifiPortal.Services.Radius
         public string? ReplyMessage { get; set; }
         public string? Class { get; set; }
     }
+
+    /// <summary>
+    /// RADIUS CoA (Change of Authorization) client for sending dynamic authorization changes
+    /// Sends CoA to FreeRADIUS server which proxies to MikroTik NAS
+    /// </summary>
+    public class RadiusCoAClient
+    {
+        private readonly ILogger _logger;
+        private readonly int _timeout;
+
+        // RADIUS CoA packet codes (RFC 5176)
+        private const byte COA_REQUEST = 43;      // CoA-Request
+        private const byte COA_ACK = 44;          // CoA-ACK
+        private const byte COA_NAK = 45;          // CoA-NAK
+        private const byte DISCONNECT_REQUEST = 40;  // Disconnect-Request
+        private const byte DISCONNECT_ACK = 41;      // Disconnect-ACK
+        private const byte DISCONNECT_NAK = 42;      // Disconnect-NAK
+
+        // Standard RADIUS attributes
+        private const byte ATTR_USER_NAME = 1;
+        private const byte ATTR_NAS_IP_ADDRESS = 4;
+        private const byte ATTR_FRAMED_IP_ADDRESS = 8;
+        private const byte ATTR_SESSION_TIMEOUT = 27;
+        private const byte ATTR_CALLING_STATION_ID = 31;
+        private const byte ATTR_ACCT_SESSION_ID = 44;
+
+        // Vendor-Specific Attribute
+        private const byte ATTR_VENDOR_SPECIFIC = 26;
+        private const int VENDOR_MIKROTIK = 14988;
+
+        // MikroTik VSA types
+        private const byte MIKROTIK_RATE_LIMIT = 8;
+
+        public RadiusCoAClient(ILogger logger, int timeout = 5000)
+        {
+            _logger = logger;
+            _timeout = timeout;
+        }
+
+        /// <summary>
+        /// Send CoA to FreeRADIUS to update bandwidth for a user session
+        /// FreeRADIUS will proxy the CoA to the appropriate NAS (MikroTik)
+        /// </summary>
+        public async Task<bool> SendBandwidthUpdateAsync(
+            string freeRadiusServer,
+            int coaPort,
+            string sharedSecret,
+            string username,
+            string? framedIpAddress,
+            string? acctSessionId,
+            int downloadKbps,
+            int uploadKbps,
+            string? nasIpAddress = null)
+        {
+            try
+            {
+                _logger.LogInformation("Sending CoA bandwidth update to FreeRADIUS {Server}:{Port} for user {User}", 
+                    freeRadiusServer, coaPort, username);
+                _logger.LogInformation("Target NAS: {NAS}, New bandwidth: {Down}k/{Up}k", 
+                    nasIpAddress ?? "default", downloadKbps, uploadKbps);
+
+                var attributes = new List<byte>();
+
+                // User-Name (required)
+                AddAttribute(attributes, ATTR_USER_NAME, Encoding.UTF8.GetBytes(username));
+
+                // NAS-IP-Address - tells FreeRADIUS which NAS to forward the CoA to
+                if (!string.IsNullOrEmpty(nasIpAddress) && IPAddress.TryParse(nasIpAddress, out var nasIp))
+                {
+                    AddAttribute(attributes, ATTR_NAS_IP_ADDRESS, nasIp.GetAddressBytes());
+                    _logger.LogDebug("Including NAS-IP-Address: {NasIP}", nasIpAddress);
+                }
+
+                // Framed-IP-Address (helps identify the session)
+                if (!string.IsNullOrEmpty(framedIpAddress) && IPAddress.TryParse(framedIpAddress, out var framedIp))
+                {
+                    AddAttribute(attributes, ATTR_FRAMED_IP_ADDRESS, framedIp.GetAddressBytes());
+                }
+
+                // Acct-Session-Id (helps identify the session)
+                if (!string.IsNullOrEmpty(acctSessionId))
+                {
+                    AddAttribute(attributes, ATTR_ACCT_SESSION_ID, Encoding.UTF8.GetBytes(acctSessionId));
+                }
+
+                // Mikrotik-Rate-Limit VSA (upload/download format)
+                var rateLimit = $"{uploadKbps}k/{downloadKbps}k";
+                AddMikrotikVsa(attributes, MIKROTIK_RATE_LIMIT, Encoding.UTF8.GetBytes(rateLimit));
+
+                // Build and send packet
+                var packet = BuildCoAPacket(COA_REQUEST, attributes, sharedSecret);
+                var response = await SendPacketAsync(freeRadiusServer, coaPort, packet);
+
+                if (response == null)
+                {
+                    _logger.LogWarning("No response received from FreeRADIUS server");
+                    return false;
+                }
+
+                var responseCode = response[0];
+                if (responseCode == COA_ACK)
+                {
+                    _logger.LogInformation("CoA-ACK received from FreeRADIUS - bandwidth updated successfully");
+                    return true;
+                }
+                else if (responseCode == COA_NAK)
+                {
+                    _logger.LogWarning("CoA-NAK received from FreeRADIUS - bandwidth update rejected");
+                    // Parse error cause if present
+                    ParseErrorCause(response);
+                    return false;
+                }
+                else
+                {
+                    _logger.LogWarning("Unexpected response code from FreeRADIUS: {Code}", responseCode);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending CoA bandwidth update to FreeRADIUS");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Send Disconnect-Request to FreeRADIUS to terminate a user session
+        /// FreeRADIUS will proxy the request to the appropriate NAS (MikroTik)
+        /// </summary>
+        public async Task<bool> SendDisconnectAsync(
+            string freeRadiusServer,
+            int coaPort,
+            string sharedSecret,
+            string username,
+            string? framedIpAddress = null,
+            string? acctSessionId = null,
+            string? callingStationId = null,
+            string? nasIpAddress = null)
+        {
+            try
+            {
+                _logger.LogInformation("Sending Disconnect-Request to FreeRADIUS {Server}:{Port} for user {User}", 
+                    freeRadiusServer, coaPort, username);
+                _logger.LogInformation("Target NAS: {NAS}", nasIpAddress ?? "default");
+
+                var attributes = new List<byte>();
+
+                // User-Name (required)
+                AddAttribute(attributes, ATTR_USER_NAME, Encoding.UTF8.GetBytes(username));
+
+                // NAS-IP-Address - tells FreeRADIUS which NAS to forward the request to
+                if (!string.IsNullOrEmpty(nasIpAddress) && IPAddress.TryParse(nasIpAddress, out var nasIp))
+                {
+                    AddAttribute(attributes, ATTR_NAS_IP_ADDRESS, nasIp.GetAddressBytes());
+                    _logger.LogDebug("Including NAS-IP-Address: {NasIP}", nasIpAddress);
+                }
+
+                // Framed-IP-Address
+                if (!string.IsNullOrEmpty(framedIpAddress) && IPAddress.TryParse(framedIpAddress, out var framedIp))
+                {
+                    AddAttribute(attributes, ATTR_FRAMED_IP_ADDRESS, framedIp.GetAddressBytes());
+                }
+
+                // Acct-Session-Id
+                if (!string.IsNullOrEmpty(acctSessionId))
+                {
+                    AddAttribute(attributes, ATTR_ACCT_SESSION_ID, Encoding.UTF8.GetBytes(acctSessionId));
+                }
+
+                // Calling-Station-Id (MAC address)
+                if (!string.IsNullOrEmpty(callingStationId))
+                {
+                    AddAttribute(attributes, ATTR_CALLING_STATION_ID, Encoding.UTF8.GetBytes(callingStationId));
+                }
+
+                // Build and send packet
+                var packet = BuildCoAPacket(DISCONNECT_REQUEST, attributes, sharedSecret);
+                var response = await SendPacketAsync(freeRadiusServer, coaPort, packet);
+
+                if (response == null)
+                {
+                    _logger.LogWarning("No response received from FreeRADIUS server");
+                    return false;
+                }
+
+                var responseCode = response[0];
+                if (responseCode == DISCONNECT_ACK)
+                {
+                    _logger.LogInformation("Disconnect-ACK received from FreeRADIUS - user disconnected successfully");
+                    return true;
+                }
+                else if (responseCode == DISCONNECT_NAK)
+                {
+                    _logger.LogWarning("Disconnect-NAK received from FreeRADIUS - disconnect rejected");
+                    ParseErrorCause(response);
+                    return false;
+                }
+                else
+                {
+                    _logger.LogWarning("Unexpected response code from FreeRADIUS: {Code}", responseCode);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending Disconnect-Request to FreeRADIUS");
+                return false;
+            }
+        }
+
+        private void ParseErrorCause(byte[] response)
+        {
+            // Try to find Error-Cause attribute (type 101)
+            if (response.Length > 20)
+            {
+                var pos = 20;
+                while (pos < response.Length - 1)
+                {
+                    var attrType = response[pos];
+                    var attrLen = response[pos + 1];
+                    
+                    if (attrLen < 2 || pos + attrLen > response.Length)
+                        break;
+                    
+                    if (attrType == 101 && attrLen >= 6) // Error-Cause
+                    {
+                        var errorCode = (response[pos + 2] << 24) | (response[pos + 3] << 16) | 
+                                       (response[pos + 4] << 8) | response[pos + 5];
+                        _logger.LogWarning("Error-Cause: {Code} ({Name})", errorCode, GetErrorCauseName(errorCode));
+                    }
+                    
+                    pos += attrLen;
+                }
+            }
+        }
+
+        private string GetErrorCauseName(int code)
+        {
+            return code switch
+            {
+                201 => "Residual Session Context Removed",
+                202 => "Invalid EAP Packet",
+                401 => "Unsupported Attribute",
+                402 => "Missing Attribute",
+                403 => "NAS Identification Mismatch",
+                404 => "Invalid Request",
+                405 => "Unsupported Service",
+                406 => "Unsupported Extension",
+                501 => "Administratively Prohibited",
+                502 => "Request Not Routable (Proxy)",
+                503 => "Session Context Not Found",
+                504 => "Session Context Not Removable",
+                505 => "Other Proxy Processing Error",
+                506 => "Resources Unavailable",
+                507 => "Request Initiated",
+                _ => "Unknown"
+            };
+        }
+
+        private byte[] BuildCoAPacket(byte code, List<byte> attributes, string sharedSecret)
+        {
+            // Generate authenticator (16 random bytes for request, will be recalculated)
+            var authenticator = new byte[16];
+            RandomNumberGenerator.Fill(authenticator);
+
+            var packetLength = 20 + attributes.Count;
+            var packet = new byte[packetLength];
+
+            // Code (1 byte)
+            packet[0] = code;
+
+            // Identifier (1 byte)
+            packet[1] = (byte)Random.Shared.Next(256);
+
+            // Length (2 bytes)
+            packet[2] = (byte)(packetLength >> 8);
+            packet[3] = (byte)(packetLength & 0xFF);
+
+            // Authenticator placeholder (16 bytes) - will be calculated
+            Array.Copy(authenticator, 0, packet, 4, 16);
+
+            // Attributes
+            if (attributes.Count > 0)
+            {
+                Array.Copy(attributes.ToArray(), 0, packet, 20, attributes.Count);
+            }
+
+            // Calculate Request Authenticator for CoA/Disconnect
+            // MD5(Code + Identifier + Length + 16 zero bytes + Attributes + Secret)
+            var toHash = new byte[packetLength + sharedSecret.Length];
+            Array.Copy(packet, toHash, packetLength);
+            Array.Clear(toHash, 4, 16); // Zero out authenticator position
+            Array.Copy(Encoding.UTF8.GetBytes(sharedSecret), 0, toHash, packetLength, sharedSecret.Length);
+
+            var calculatedAuth = System.Security.Cryptography.MD5.HashData(toHash);
+            Array.Copy(calculatedAuth, 0, packet, 4, 16);
+
+            return packet;
+        }
+
+        private async Task<byte[]?> SendPacketAsync(string ipAddress, int port, byte[] packet)
+        {
+            using var udpClient = new UdpClient();
+            udpClient.Client.ReceiveTimeout = _timeout;
+
+            var endpoint = new IPEndPoint(IPAddress.Parse(ipAddress), port);
+
+            _logger.LogDebug("Sending CoA packet ({Length} bytes) to {Endpoint}", packet.Length, endpoint);
+
+            await udpClient.SendAsync(packet, packet.Length, endpoint);
+
+            var responseTask = udpClient.ReceiveAsync();
+            var timeoutTask = Task.Delay(_timeout);
+
+            var completedTask = await Task.WhenAny(responseTask, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                _logger.LogWarning("CoA request timed out after {Timeout}ms", _timeout);
+                return null;
+            }
+
+            var response = await responseTask;
+            _logger.LogDebug("Received response ({Length} bytes)", response.Buffer.Length);
+
+            return response.Buffer;
+        }
+
+        private void AddAttribute(List<byte> attributes, byte type, byte[] value)
+        {
+            var length = (byte)(2 + value.Length);
+            attributes.Add(type);
+            attributes.Add(length);
+            attributes.AddRange(value);
+        }
+
+        private void AddMikrotikVsa(List<byte> attributes, byte vsaType, byte[] value)
+        {
+            // Vendor-Specific Attribute format:
+            // Type (26) + Length + Vendor-Id (4 bytes) + VSA-Type (1) + VSA-Length (1) + VSA-Value
+
+            var vsaLength = (byte)(2 + value.Length); // VSA-Type + VSA-Length + Value
+            var totalLength = (byte)(6 + vsaLength);  // Type + Length + Vendor-Id (4) + VSA
+
+            attributes.Add(ATTR_VENDOR_SPECIFIC);
+            attributes.Add(totalLength);
+
+            // Vendor-Id (MikroTik = 14988) in network byte order
+            attributes.Add((byte)((VENDOR_MIKROTIK >> 24) & 0xFF));
+            attributes.Add((byte)((VENDOR_MIKROTIK >> 16) & 0xFF));
+            attributes.Add((byte)((VENDOR_MIKROTIK >> 8) & 0xFF));
+            attributes.Add((byte)(VENDOR_MIKROTIK & 0xFF));
+
+            // VSA-Type
+            attributes.Add(vsaType);
+
+            // VSA-Length (includes type and length bytes)
+            attributes.Add(vsaLength);
+
+            // VSA-Value
+            attributes.AddRange(value);
+        }
+    }
 }

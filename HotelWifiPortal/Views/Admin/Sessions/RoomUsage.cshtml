@@ -4,6 +4,8 @@
     Layout = "~/Views/Shared/_AdminLayout.cshtml";
     var totalUsageBytes = (long)(ViewBag.TotalUsageBytes ?? 0);
     var totalRooms = (int)(ViewBag.TotalRooms ?? 0);
+    var quotaExceededCount = Model.Count(r => r.IsQuotaExceeded);
+    var paidPackageCount = Model.Count(r => r.HasPurchasedPackage);
 }
 
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -20,7 +22,7 @@
 
 <!-- Summary Cards -->
 <div class="row mb-4">
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card bg-primary text-white">
             <div class="card-body text-center">
                 <h3 class="mb-0">@totalRooms</h3>
@@ -28,7 +30,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card bg-info text-white">
             <div class="card-body text-center">
                 <h3 class="mb-0">@((totalUsageBytes / 1073741824.0).ToString("N2")) GB</h3>
@@ -36,11 +38,19 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
-        <div class="card bg-success text-white">
+    <div class="col-md-3">
+        <div class="card @(quotaExceededCount > 0 ? "bg-danger" : "bg-success") text-white">
             <div class="card-body text-center">
-                <h3 class="mb-0">@Model.Sum(r => r.ActiveSessions)</h3>
-                <small>Active Sessions</small>
+                <h3 class="mb-0">@quotaExceededCount</h3>
+                <small>Quota Exceeded</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-dark">
+            <div class="card-body text-center">
+                <h3 class="mb-0">@paidPackageCount</h3>
+                <small>Paid Upgrades</small>
             </div>
         </div>
     </div>
@@ -68,11 +78,10 @@
                     <tr>
                         <th>Room</th>
                         <th>Guest</th>
-                        <th>Room Usage</th>
-                        <th>Quota</th>
-                        <th>Devices</th>
-                        <th>Sessions</th>
+                        <th>Usage</th>
+                        <th>Quota Breakdown</th>
                         <th>Status</th>
+                        <th>Devices</th>
                         <th>Last Activity</th>
                     </tr>
                 </thead>
@@ -80,48 +89,94 @@
                     @foreach (var room in Model)
                     {
                         var quotaPercent = room.QuotaPercentUsed;
-                        var quotaBarColor = quotaPercent > 100 ? "bg-danger" : quotaPercent > 80 ? "bg-warning" : "bg-success";
-                        <tr class="@(quotaPercent > 100 ? "table-danger" : room.ActiveSessions > 0 ? "table-success" : "")">
-                            <td><strong>@room.RoomNumber</strong></td>
+                        var quotaBarColor = room.IsQuotaExceeded ? "bg-danger" : quotaPercent > 80 ? "bg-warning" : "bg-success";
+                        var rowClass = room.IsQuotaExceeded ? "table-danger" :
+                        room.HasPurchasedPackage ? "table-info" :
+                        room.ActiveSessions > 0 ? "table-success" : "";
+                        <tr class="@rowClass">
+                            <td>
+                                <strong>@room.RoomNumber</strong>
+                                @if (room.HasPurchasedPackage)
+                                {
+                                    <br />
+                            
+                                    <span class="badge bg-warning text-dark"><i class="bi bi-star-fill"></i> Premium</span>
+                                }
+                            </td>
                             <td>@(room.GuestName ?? "-")</td>
                             <td>
                                 @if (room.UsedQuotaBytes >= 1073741824)
                                 {
-                                    <span class="fw-bold">@((room.UsedQuotaBytes / 1073741824.0).ToString("N2")) GB</span>
+                                    <span class="fw-bold">@room.UsedQuotaGB.ToString("N2") GB</span>
                                 }
                                 else
                                 {
                                     <span>@((room.UsedQuotaBytes / 1048576.0).ToString("N1")) MB</span>
                                 }
                             </td>
-                            <td style="min-width: 150px;">
+                            <td style="min-width: 220px;">
                                 @if (room.TotalQuotaBytes > 0)
                                 {
-                                    <div class="progress" style="height: 20px;">
+                                    <!-- Progress bar -->
+                                    <div class="progress mb-1" style="height: 20px;">
                                         <div class="progress-bar @quotaBarColor" style="width: @Math.Min(quotaPercent, 100)%">
                                             @quotaPercent%
                                         </div>
                                     </div>
-                                    <small class="text-muted">
-                                        @((room.UsedQuotaBytes / 1073741824.0).ToString("N2"))/@((room.TotalQuotaBytes / 1073741824.0).ToString("N2")) GB
-                                    </small>
+
+                                    <!-- Quota breakdown -->
+                                    <div class="small">
+                                        <span class="text-muted">Free:</span> <span class="fw-semibold">@room.FreeQuotaGB.ToString("N1") GB</span>
+                                        @if (room.PaidQuotaBytes > 0)
+                                        {
+                                            <span class="text-success ms-2">
+                                                <i class="bi bi-plus-circle"></i> Paid: <span class="fw-semibold">@room.PaidQuotaGB.ToString("N1") GB</span>
+                                            </span>
+                                        }
+                                    </div>
+                                    <div class="small text-muted">
+                                        Remaining: <span class="fw-semibold @(room.RemainingQuotaGB <= 0 ? "text-danger" : "")">@room.RemainingQuotaGB.ToString("N2") GB</span>
+                                        / @room.TotalQuotaGB.ToString("N1") GB
+                                    </div>
                                 }
                                 else
                                 {
                                     <span class="text-muted">No quota set</span>
                                 }
                             </td>
-                            <td><span class="badge bg-secondary">@room.DeviceCount</span></td>
-                            <td>@room.SessionCount</td>
                             <td>
-                                @if (room.ActiveSessions > 0)
+                                @if (room.IsQuotaExceeded)
                                 {
-                                    <span class="badge bg-success">@room.ActiveSessions online</span>
+                                    <span class="badge bg-danger">
+                                        <i class="bi bi-exclamation-triangle-fill me-1"></i>Quota Exceeded
+                                    </span>
+                                    @if (room.HasPurchasedPackage)
+                                    {
+                                        <br />
+                                        <span class="badge bg-info mt-1">
+                                            <i class="bi bi-arrow-repeat me-1"></i>Paid Applied
+                                        </span>
+                                    }
+                                }
+                                else if (room.ActiveSessions > 0)
+                                {
+                                    <span class="badge bg-success">
+                                        <i class="bi bi-wifi me-1"></i>@room.ActiveSessions online
+                                    </span>
+                                }
+                                else if (room.QuotaExceededSessions > 0)
+                                {
+                                    <span class="badge bg-warning text-dark">
+                                        <i class="bi bi-pause-circle me-1"></i>@room.QuotaExceededSessions blocked
+                                    </span>
                                 }
                                 else
                                 {
                                     <span class="text-muted">offline</span>
                                 }
+                            </td>
+                            <td>
+                                <span class="badge bg-secondary">@room.DeviceCount</span>
                             </td>
                             <td>
                                 <small>@room.LastActivity.ToString("MMM dd HH:mm")</small>
@@ -131,7 +186,7 @@
                     @if (!Model.Any())
                     {
                         <tr>
-                            <td colspan="8" class="text-center py-5 text-muted">
+                            <td colspan="7" class="text-center py-5 text-muted">
                                 <i class="bi bi-building fs-1 d-block mb-3"></i>
                                 No active guests found
                             </td>
@@ -139,6 +194,19 @@
                     }
                 </tbody>
             </table>
+        </div>
+    </div>
+</div>
+
+<!-- Legend -->
+<div class="card mt-3">
+    <div class="card-body py-2">
+        <div class="d-flex gap-4 flex-wrap align-items-center">
+            <small class="text-muted"><strong>Legend:</strong></small>
+            <small><span class="badge bg-danger">Quota Exceeded</span> - Guest used all quota</small>
+            <small><span class="badge bg-warning text-dark"><i class="bi bi-star-fill"></i> Premium</span> - Purchased paid package</small>
+            <small><span class="badge bg-info"><i class="bi bi-arrow-repeat"></i> Paid Applied</span> - Upgraded after quota exceeded</small>
+            <small><span class="badge bg-success">Online</span> - Currently connected</small>
         </div>
     </div>
 </div>

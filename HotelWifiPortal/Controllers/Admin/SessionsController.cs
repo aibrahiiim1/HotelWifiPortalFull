@@ -90,6 +90,7 @@ namespace HotelWifiPortal.Controllers.Admin
                     DeviceCount = g.Select(s => s.MacAddress).Distinct().Count(),
                     SessionCount = g.Count(),
                     ActiveSessions = g.Count(s => s.Status == "Active"),
+                    QuotaExceededSessions = g.Count(s => s.Status == "QuotaExceeded"),
                     FirstSession = g.Min(s => s.SessionStart),
                     LastActivity = g.Max(s => s.SessionStart)
                 })
@@ -120,7 +121,14 @@ namespace HotelWifiPortal.Controllers.Admin
                     SessionCount = stats?.SessionCount ?? 0,
                     ActiveSessions = stats?.ActiveSessions ?? 0,
                     FirstSession = stats?.FirstSession ?? g.CheckInDate,
-                    LastActivity = stats?.LastActivity ?? g.CheckInDate
+                    LastActivity = stats?.LastActivity ?? g.CheckInDate,
+                    // New fields for quota status
+                    FreeQuotaBytes = g.FreeQuotaBytes,
+                    PaidQuotaBytes = g.PaidQuotaBytes,
+                    IsQuotaExceeded = g.IsQuotaExhausted,
+                    HasPurchasedPackage = g.HasPurchasedPackage,
+                    GuestStatus = g.Status,
+                    QuotaExceededSessions = stats?.QuotaExceededSessions ?? 0
                 };
             })
             .OrderByDescending(r => r.TotalBytesUsed)
@@ -869,5 +877,20 @@ namespace HotelWifiPortal.Controllers.Admin
         public double TotalMBUsed => TotalBytesUsed / 1048576.0;
         public double TotalGBUsed => TotalBytesUsed / 1073741824.0;
         public int QuotaPercentUsed => TotalQuotaBytes > 0 ? (int)((UsedQuotaBytes * 100) / TotalQuotaBytes) : 0;
+
+        // Quota status and paid packages
+        public long FreeQuotaBytes { get; set; }
+        public long PaidQuotaBytes { get; set; }
+        public bool IsQuotaExceeded { get; set; }
+        public bool HasPurchasedPackage { get; set; }
+        public string? GuestStatus { get; set; }
+        public int QuotaExceededSessions { get; set; }
+
+        // Computed properties
+        public double FreeQuotaGB => FreeQuotaBytes / 1073741824.0;
+        public double PaidQuotaGB => PaidQuotaBytes / 1073741824.0;
+        public double TotalQuotaGB => TotalQuotaBytes / 1073741824.0;
+        public double UsedQuotaGB => UsedQuotaBytes / 1073741824.0;
+        public double RemainingQuotaGB => Math.Max(0, TotalQuotaGB - UsedQuotaGB);
     }
 }

@@ -1,6 +1,7 @@
 using HotelWifiPortal.Data;
 using HotelWifiPortal.Models.Entities;
 using HotelWifiPortal.Models.ViewModels;
+using HotelWifiPortal.Services.Radius;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,11 +14,16 @@ namespace HotelWifiPortal.Controllers.Admin
     {
         private readonly ApplicationDbContext _dbContext;
         private readonly ILogger<PackagesController> _logger;
+        private readonly FreeRadiusService _freeRadiusService;
 
-        public PackagesController(ApplicationDbContext dbContext, ILogger<PackagesController> logger)
+        public PackagesController(
+            ApplicationDbContext dbContext, 
+            ILogger<PackagesController> logger,
+            FreeRadiusService freeRadiusService)
         {
             _dbContext = dbContext;
             _logger = logger;
+            _freeRadiusService = freeRadiusService;
         }
 
         // Free Bandwidth Packages
@@ -106,7 +112,7 @@ namespace HotelWifiPortal.Controllers.Admin
 
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public async Task<IActionResult> Edit(int id, PackageEditViewModel model)
+        public async Task<IActionResult> Edit(int id, PackageEditViewModel model, bool applyImmediately = false)
         {
             if (id != model.Id)
             {
@@ -123,6 +129,11 @@ namespace HotelWifiPortal.Controllers.Admin
             {
                 return NotFound();
             }
+
+            // Check if bandwidth changed
+            bool bandwidthChanged = package.DownloadSpeedKbps != model.DownloadSpeedKbps ||
+                                    package.UploadSpeedKbps != model.UploadSpeedKbps ||
+                                    package.SpeedLimitKbps != model.SpeedLimitKbps;
 
             package.Name = model.Name;
             package.Description = model.Description;
@@ -142,7 +153,77 @@ namespace HotelWifiPortal.Controllers.Admin
 
             await _dbContext.SaveChangesAsync();
 
-            TempData["Success"] = "Package updated successfully.";
+            // If bandwidth changed, update all affected guests
+            if (bandwidthChanged)
+            {
+                _logger.LogInformation("Bandwidth changed for package {Name}, syncing affected guests...", package.Name);
+                
+                // Get new bandwidth values
+                int newDownloadKbps = model.DownloadSpeedKbps ?? model.SpeedLimitKbps ?? 10240;
+                int newUploadKbps = model.UploadSpeedKbps ?? model.SpeedLimitKbps ?? 5120;
+                
+                // Find all checked-in guests that match this package's stay length criteria
+                var affectedGuests = await _dbContext.Guests
+                    .Where(g => (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"))
+                    .ToListAsync();
+
+                int updatedCount = 0;
+                int coaSuccessCount = 0;
+                
+                foreach (var guest in affectedGuests)
+                {
+                    var stayLength = Math.Max(1, (guest.DepartureDate - guest.ArrivalDate).Days);
+                    
+                    // Check if this guest matches this package
+                    if (stayLength >= package.MinStayDays && 
+                        (package.MaxStayDays == null || stayLength <= package.MaxStayDays))
+                    {
+                        // Update FreeRADIUS entry for this guest
+                        var success = await _freeRadiusService.CreateOrUpdateUserAsync(guest);
+                        if (success)
+                        {
+                            updatedCount++;
+                            _logger.LogInformation("Updated FreeRADIUS for guest Room {Room}", guest.RoomNumber);
+                            
+                            // If applyImmediately is true, send CoA to update bandwidth in real-time
+                            if (applyImmediately)
+                            {
+                                var coaSuccess = await _freeRadiusService.UpdateBandwidthViaCoAAsync(
+                                    guest.RoomNumber, 
+                                    newDownloadKbps, 
+                                    newUploadKbps);
+                                    
+                                if (coaSuccess)
+                                {
+                                    coaSuccessCount++;
+                                    _logger.LogInformation("CoA bandwidth update sent for Room {Room}", guest.RoomNumber);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (updatedCount > 0)
+                {
+                    if (applyImmediately)
+                    {
+                        TempData["Success"] = $"Package updated. {updatedCount} guest(s) updated in FreeRADIUS. {coaSuccessCount} guest(s) bandwidth updated immediately via CoA.";
+                    }
+                    else
+                    {
+                        TempData["Success"] = $"Package updated. {updatedCount} guest(s) updated in FreeRADIUS. Guests will get new speed on next reconnect.";
+                    }
+                }
+                else
+                {
+                    TempData["Success"] = "Package updated successfully. No active guests matched this package.";
+                }
+            }
+            else
+            {
+                TempData["Success"] = "Package updated successfully.";
+            }
+
             return RedirectToAction(nameof(Index));
         }
 

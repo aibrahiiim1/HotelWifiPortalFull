@@ -19,7 +19,7 @@ namespace HotelWifiPortal.Services.Radius
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<FreeRadiusService> _logger;
         private readonly IConfiguration _configuration;
-        
+
         private bool _isEnabled;
         private string _connectionString = "";
         private string _tablePrefix = "rad";
@@ -35,7 +35,7 @@ namespace HotelWifiPortal.Services.Radius
             _serviceProvider = serviceProvider;
             _logger = logger;
             _configuration = configuration;
-            
+
             // Initial load from appsettings as fallback
             LoadConfigurationFromAppSettings();
         }
@@ -58,22 +58,22 @@ namespace HotelWifiPortal.Services.Radius
             {
                 using var scope = _serviceProvider.CreateScope();
                 var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-                
+
                 var settings = await dbContext.SystemSettings.ToListAsync();
-                
+
                 var enabledSetting = settings.FirstOrDefault(s => s.Key == "FreeRadiusEnabled")?.Value;
                 _isEnabled = enabledSetting?.ToLower() == "true";
-                
+
                 _connectionString = settings.FirstOrDefault(s => s.Key == "FreeRadiusConnectionString")?.Value ?? "";
                 _tablePrefix = settings.FirstOrDefault(s => s.Key == "FreeRadiusTablePrefix")?.Value ?? "rad";
                 _nasSecret = settings.FirstOrDefault(s => s.Key == "FreeRadiusNasSecret")?.Value ?? "radius_secret";
-                
+
                 var coaPortStr = settings.FirstOrDefault(s => s.Key == "FreeRadiusCoAPort")?.Value;
                 _coaPort = int.TryParse(coaPortStr, out var port) ? port : 3799;
-                
+
                 _configLoaded = true;
-                
-                _logger.LogDebug("FreeRADIUS config loaded from DB: Enabled={Enabled}, ConnStr={HasConnStr}, Prefix={Prefix}", 
+
+                _logger.LogDebug("FreeRADIUS config loaded from DB: Enabled={Enabled}, ConnStr={HasConnStr}, Prefix={Prefix}",
                     _isEnabled, !string.IsNullOrEmpty(_connectionString), _tablePrefix);
             }
             catch (Exception ex)
@@ -103,10 +103,10 @@ namespace HotelWifiPortal.Services.Radius
         public async Task<bool> CreateOrUpdateUserAsync(Guest guest, string? password = null)
         {
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
             {
-                _logger.LogDebug("FreeRADIUS is not enabled or no connection string. Enabled={Enabled}, HasConnStr={HasConnStr}", 
+                _logger.LogDebug("FreeRADIUS is not enabled or no connection string. Enabled={Enabled}, HasConnStr={HasConnStr}",
                     _isEnabled, !string.IsNullOrEmpty(_connectionString));
                 return false;
             }
@@ -119,15 +119,15 @@ namespace HotelWifiPortal.Services.Radius
                 // 2. WifiPassword (if guest has set their own password)
                 // 3. LocalPassword (standalone mode)
                 // 4. ReservationNumber (fallback for first login)
-                var userPassword = password 
-                    ?? guest.WifiPassword 
-                    ?? guest.LocalPassword 
+                var userPassword = password
+                    ?? guest.WifiPassword
+                    ?? guest.LocalPassword
                     ?? guest.ReservationNumber;
 
-                _logger.LogInformation("Creating/updating FreeRADIUS user: {Username}, PasswordSource: {Source}", 
-                    username, 
-                    password != null ? "explicit" : 
-                    !string.IsNullOrEmpty(guest.WifiPassword) ? "WifiPassword" : 
+                _logger.LogInformation("Creating/updating FreeRADIUS user: {Username}, PasswordSource: {Source}",
+                    username,
+                    password != null ? "explicit" :
+                    !string.IsNullOrEmpty(guest.WifiPassword) ? "WifiPassword" :
                     !string.IsNullOrEmpty(guest.LocalPassword) ? "LocalPassword" : "ReservationNumber");
 
                 using var connection = new MySqlConnection(_connectionString);
@@ -147,17 +147,17 @@ namespace HotelWifiPortal.Services.Radius
                 bool sharedUsage = true; // Default: room-level quota
                 bool sharedBandwidth = true;
                 int maxDevices = 3;
-                
+
                 // Start with hardcoded defaults (ignore profile for bandwidth - use packages only)
                 int downloadKbps = 10240; // 10 Mbps default
                 int uploadKbps = 5120;    // 5 Mbps default
-                
-                _logger.LogInformation("Starting with default bandwidth: Download={Down}kbps, Upload={Up}kbps", 
+
+                _logger.LogInformation("Starting with default bandwidth: Download={Down}kbps, Upload={Up}kbps",
                     downloadKbps, uploadKbps);
 
                 // Check for active paid package FIRST
                 var activePaidPackage = await dbContext.PaymentTransactions
-                    .Where(t => t.GuestId == guest.Id && 
+                    .Where(t => t.GuestId == guest.Id &&
                                t.Status == "Completed" &&
                                t.CompletedAt.HasValue &&
                                t.CompletedAt.Value.AddHours(t.DurationHours ?? 24) > DateTime.UtcNow)
@@ -186,32 +186,32 @@ namespace HotelWifiPortal.Services.Radius
                     var stayLength = Math.Max(1, (guest.DepartureDate - guest.ArrivalDate).Days);
                     _logger.LogInformation("Guest {Room}: StayLength={Days} days (Arrival={Arrival}, Departure={Departure})",
                         guest.RoomNumber, stayLength, guest.ArrivalDate, guest.DepartureDate);
-                    
+
                     // Find ALL active free packages
                     var freePackages = await dbContext.BandwidthPackages
                         .Where(p => p.IsActive)
                         .OrderByDescending(p => p.MinStayDays)
                         .ToListAsync();
-                    
+
                     _logger.LogInformation("Found {Count} active free packages:", freePackages.Count);
-                    
+
                     foreach (var pkg in freePackages)
                     {
                         _logger.LogInformation("  Package: {Name}, MinStay={Min}, MaxStay={Max}, DL={DL}kbps, UL={UL}kbps, SpeedLimit={SL}kbps, IsActive={Active}",
-                            pkg.Name, pkg.MinStayDays, pkg.MaxStayDays, 
+                            pkg.Name, pkg.MinStayDays, pkg.MaxStayDays,
                             pkg.DownloadSpeedKbps, pkg.UploadSpeedKbps, pkg.SpeedLimitKbps, pkg.IsActive);
                     }
-                    
+
                     // Try to find matching package by stay length
                     var freePackage = freePackages
-                        .FirstOrDefault(p => p.MinStayDays <= stayLength && 
+                        .FirstOrDefault(p => p.MinStayDays <= stayLength &&
                             (p.MaxStayDays == null || p.MaxStayDays >= stayLength));
 
                     // If no match found, use the first available package (fallback)
                     if (freePackage == null && freePackages.Any())
                     {
                         freePackage = freePackages.OrderBy(p => p.MinStayDays).First();
-                        _logger.LogWarning("No package matched StayLength={Days}, using fallback package: {Name}", 
+                        _logger.LogWarning("No package matched StayLength={Days}, using fallback package: {Name}",
                             stayLength, freePackage.Name);
                     }
 
@@ -220,16 +220,16 @@ namespace HotelWifiPortal.Services.Radius
                         // Use specific speeds first, then generic SpeedLimitKbps, then keep defaults
                         var pkgDownload = freePackage.DownloadSpeedKbps ?? freePackage.SpeedLimitKbps;
                         var pkgUpload = freePackage.UploadSpeedKbps ?? freePackage.SpeedLimitKbps;
-                        
+
                         if (pkgDownload.HasValue && pkgDownload.Value > 0)
                             downloadKbps = pkgDownload.Value;
                         if (pkgUpload.HasValue && pkgUpload.Value > 0)
                             uploadKbps = pkgUpload.Value;
-                            
+
                         sharedBandwidth = freePackage.SharedBandwidth;
                         sharedUsage = freePackage.SharedUsage;
                         maxDevices = freePackage.MaxDevices > 0 ? freePackage.MaxDevices : 3;
-                        
+
                         _logger.LogInformation("MATCHED Free Package: {Name}, Download={Down}kbps, Upload={Up}kbps, SharedBW={Shared}",
                             freePackage.Name, downloadKbps, uploadKbps, sharedBandwidth);
                     }
@@ -250,19 +250,19 @@ namespace HotelWifiPortal.Services.Radius
                 {
                     // Count active devices for this room from radacct
                     var activeDeviceCount = await CountActiveDevicesAsync(connection, guest.RoomNumber);
-                    
+
                     // Add 1 for the device that's about to connect (if it's a new connection)
                     // We assume worst case (max devices) if we can't count
                     if (activeDeviceCount == 0)
                     {
                         activeDeviceCount = 1; // At least this device
                     }
-                    
+
                     // Divide bandwidth among devices
                     // Use ceiling to ensure minimum bandwidth per device
                     effectiveDownloadKbps = Math.Max(1024, downloadKbps / activeDeviceCount); // Min 1 Mbps
                     effectiveUploadKbps = Math.Max(512, uploadKbps / activeDeviceCount);      // Min 0.5 Mbps
-                    
+
                     _logger.LogInformation("Shared Bandwidth: Room {Room} has {Devices} active device(s). Speed per device: {Down}k/{Up}k (Total: {TotalDown}k/{TotalUp}k)",
                         guest.RoomNumber, activeDeviceCount, effectiveDownloadKbps, effectiveUploadKbps, downloadKbps, uploadKbps);
                 }
@@ -284,7 +284,7 @@ namespace HotelWifiPortal.Services.Radius
                 {
                     // Per-device quota mode - use maxDevices from package settings
                     quotaForDevice = remainingQuota / maxDevices;
-                    _logger.LogDebug("FreeRADIUS: Per-device quota mode: {Quota}MB per device (maxDevices={Max})", 
+                    _logger.LogDebug("FreeRADIUS: Per-device quota mode: {Quota}MB per device (maxDevices={Max})",
                         quotaForDevice / 1048576, maxDevices);
                 }
                 else
@@ -299,7 +299,7 @@ namespace HotelWifiPortal.Services.Radius
                 try
                 {
                     // Clear existing entries
-                    await ExecuteAsync(connection, $"DELETE FROM {_tablePrefix}check WHERE username = @username", 
+                    await ExecuteAsync(connection, $"DELETE FROM {_tablePrefix}check WHERE username = @username",
                         new MySqlParameter("@username", username), transaction);
                     await ExecuteAsync(connection, $"DELETE FROM {_tablePrefix}reply WHERE username = @username",
                         new MySqlParameter("@username", username), transaction);
@@ -339,8 +339,8 @@ namespace HotelWifiPortal.Services.Radius
                                 new MySqlParameter("@username", username),
                                 new MySqlParameter("@quota", totalQuotaBytes.ToString())
                             }, transaction);
-                        
-                        _logger.LogInformation("Set FreeRADIUS quota for {Username}: Max-Total-Data = {Quota} bytes ({QuotaMB}MB)", 
+
+                        _logger.LogInformation("Set FreeRADIUS quota for {Username}: Max-Total-Data = {Quota} bytes ({QuotaMB}MB)",
                             username, totalQuotaBytes, totalQuotaBytes / 1048576.0);
                     }
 
@@ -360,7 +360,7 @@ namespace HotelWifiPortal.Services.Radius
                         replyAttributes.Add(("Mikrotik-Rate-Limit", ":=", rateLimit));
                         replyAttributes.Add(("WISPr-Bandwidth-Max-Up", ":=", (effectiveUploadKbps * 1000).ToString()));
                         replyAttributes.Add(("WISPr-Bandwidth-Max-Down", ":=", (effectiveDownloadKbps * 1000).ToString()));
-                        
+
                         _logger.LogInformation("Setting rate limit for {User}: {RateLimit}", username, rateLimit);
                     }
 
@@ -370,7 +370,7 @@ namespace HotelWifiPortal.Services.Radius
                     {
                         var gigawords = quotaForDevice / 4294967296;
                         var bytes = quotaForDevice % 4294967296;
-                        
+
                         if (gigawords > 0)
                             replyAttributes.Add(("Mikrotik-Total-Limit-Gigawords", ":=", gigawords.ToString()));
                         replyAttributes.Add(("Mikrotik-Total-Limit", ":=", bytes.ToString()));
@@ -457,7 +457,7 @@ namespace HotelWifiPortal.Services.Radius
         public async Task<bool> UpdateRoomBandwidthAsync(string roomNumber)
         {
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
                 return false;
 
@@ -465,12 +465,12 @@ namespace HotelWifiPortal.Services.Radius
             {
                 using var scope = _serviceProvider.CreateScope();
                 var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-                
+
                 // Get guest for this room
                 var guest = await dbContext.Guests
-                    .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber && 
+                    .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber &&
                         (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"));
-                
+
                 if (guest == null)
                 {
                     _logger.LogDebug("No checked-in guest found for room {Room}", roomNumber);
@@ -484,7 +484,7 @@ namespace HotelWifiPortal.Services.Radius
 
                 // Check for active paid package
                 var activePaidPackage = await dbContext.PaymentTransactions
-                    .Where(t => t.GuestId == guest.Id && 
+                    .Where(t => t.GuestId == guest.Id &&
                                t.Status == "Completed" &&
                                t.CompletedAt.HasValue &&
                                t.CompletedAt.Value.AddHours(t.DurationHours ?? 24) > DateTime.UtcNow)
@@ -523,7 +523,7 @@ namespace HotelWifiPortal.Services.Radius
 
                 // Count active devices
                 var activeDeviceCount = await CountActiveDevicesAsync(connection, roomNumber);
-                
+
                 if (activeDeviceCount == 0)
                 {
                     _logger.LogDebug("No active devices for room {Room}", roomNumber);
@@ -538,29 +538,29 @@ namespace HotelWifiPortal.Services.Radius
                 {
                     effectiveDownloadKbps = Math.Max(1024, downloadKbps / activeDeviceCount);
                     effectiveUploadKbps = Math.Max(512, uploadKbps / activeDeviceCount);
-                    
+
                     _logger.LogInformation("Updating shared bandwidth for Room {Room}: {Devices} devices, {Down}k/{Up}k per device",
                         roomNumber, activeDeviceCount, effectiveDownloadKbps, effectiveUploadKbps);
                 }
 
                 // Update radreply with new bandwidth
                 var rateLimit = $"{effectiveUploadKbps}k/{effectiveDownloadKbps}k";
-                
-                await ExecuteAsync(connection, 
+
+                await ExecuteAsync(connection,
                     $"UPDATE {_tablePrefix}reply SET value = @value WHERE username = @username AND attribute = 'Mikrotik-Rate-Limit'",
                     new[] {
                         new MySqlParameter("@username", roomNumber),
                         new MySqlParameter("@value", rateLimit)
                     });
 
-                await ExecuteAsync(connection, 
+                await ExecuteAsync(connection,
                     $"UPDATE {_tablePrefix}reply SET value = @value WHERE username = @username AND attribute = 'WISPr-Bandwidth-Max-Down'",
                     new[] {
                         new MySqlParameter("@username", roomNumber),
                         new MySqlParameter("@value", (effectiveDownloadKbps * 1000).ToString())
                     });
 
-                await ExecuteAsync(connection, 
+                await ExecuteAsync(connection,
                     $"UPDATE {_tablePrefix}reply SET value = @value WHERE username = @username AND attribute = 'WISPr-Bandwidth-Max-Up'",
                     new[] {
                         new MySqlParameter("@username", roomNumber),
@@ -604,7 +604,7 @@ namespace HotelWifiPortal.Services.Radius
                     FROM {_tablePrefix}acct 
                     WHERE username = @username
                     GROUP BY username", connection);
-                
+
                 cmd.Parameters.AddWithValue("@username", username);
 
                 using var reader = await cmd.ExecuteReaderAsync();
@@ -683,7 +683,7 @@ namespace HotelWifiPortal.Services.Radius
         public async Task SyncAccountingToGuestsAsync()
         {
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled)
             {
                 _logger.LogWarning("FreeRADIUS is not enabled, skipping accounting sync");
@@ -702,7 +702,7 @@ namespace HotelWifiPortal.Services.Radius
                 var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
                 var guests = await dbContext.Guests
-                    .Where(g => g.Status.ToLower() == "checked-in" || 
+                    .Where(g => g.Status.ToLower() == "checked-in" ||
                                g.Status.ToLower() == "checkedin" ||
                                g.Status == "CheckedIn")
                     .ToListAsync();
@@ -766,6 +766,266 @@ namespace HotelWifiPortal.Services.Radius
         #region Session Control (CoA/Disconnect)
 
         /// <summary>
+        /// Disconnect a user by username - sends CoA Disconnect-Request via FreeRADIUS to MikroTik
+        /// This will force the user to reconnect and get new bandwidth settings
+        /// </summary>
+        public async Task<bool> DisconnectUserByUsernameAsync(string username)
+        {
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+                return false;
+
+            try
+            {
+                _logger.LogInformation("Disconnecting user {Username} via FreeRADIUS CoA", username);
+
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Get active session info
+                var sql = $@"SELECT framedipaddress, acctsessionid, nasipaddress, callingstationid 
+                            FROM {_tablePrefix}acct 
+                            WHERE username = @username AND acctstoptime IS NULL 
+                            ORDER BY acctstarttime DESC LIMIT 1";
+
+                using var cmd = new MySqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@username", username);
+
+                string? framedIp = null;
+                string? sessionId = null;
+                string? nasIp = null;
+                string? callingStationId = null;
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    if (!await reader.ReadAsync())
+                    {
+                        _logger.LogDebug("No active session found for {Username}", username);
+                        return false;
+                    }
+
+                    framedIp = reader.IsDBNull(0) ? null : reader.GetString(0);
+                    sessionId = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    nasIp = reader.IsDBNull(2) ? null : reader.GetString(2);
+                    callingStationId = reader.IsDBNull(3) ? null : reader.GetString(3);
+                }
+
+                if (string.IsNullOrEmpty(nasIp))
+                {
+                    _logger.LogWarning("Missing NAS IP for {Username}", username);
+                    return false;
+                }
+
+                // Get FreeRADIUS server address from configuration
+                var freeRadiusServer = _configuration.GetValue<string>("FreeRadius:Server") ?? "192.168.2.252";
+                var freeRadiusSecret = _configuration.GetValue<string>("FreeRadius:Secret") ?? "testing123";
+
+                // Send CoA Disconnect-Request to FreeRADIUS server
+                // FreeRADIUS will proxy it to MikroTik
+                var coaClient = new RadiusCoAClient(_logger, 5000);
+                var success = await coaClient.SendDisconnectAsync(
+                    freeRadiusServer,      // Send to FreeRADIUS, not MikroTik
+                    _coaPort,              // CoA port (default 3799)
+                    freeRadiusSecret,      // FreeRADIUS secret
+                    username,
+                    framedIp,
+                    sessionId,
+                    callingStationId,
+                    nasIp);                // Include NAS-IP so FreeRADIUS knows where to forward
+
+                if (success)
+                {
+                    // Mark session as stopped in database
+                    var updateSql = $@"UPDATE {_tablePrefix}acct 
+                                      SET acctstoptime = NOW(), 
+                                          acctterminatecause = 'Admin-Reset'
+                                      WHERE username = @username AND acctstoptime IS NULL";
+
+                    using var updateCmd = new MySqlCommand(updateSql, connection);
+                    updateCmd.Parameters.AddWithValue("@username", username);
+                    await updateCmd.ExecuteNonQueryAsync();
+
+                    _logger.LogInformation("User {Username} disconnected via FreeRADIUS CoA", username);
+                }
+                else
+                {
+                    _logger.LogWarning("CoA Disconnect failed for {Username}, trying database update only", username);
+
+                    // Fallback: just mark session as stopped
+                    var updateSql = $@"UPDATE {_tablePrefix}acct 
+                                      SET acctstoptime = NOW(), 
+                                          acctterminatecause = 'Admin-Reset'
+                                      WHERE username = @username AND acctstoptime IS NULL";
+
+                    using var updateCmd = new MySqlCommand(updateSql, connection);
+                    updateCmd.Parameters.AddWithValue("@username", username);
+                    await updateCmd.ExecuteNonQueryAsync();
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error disconnecting user {Username}", username);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Update bandwidth for a user via CoA (Change of Authorization)
+        /// Sends CoA to FreeRADIUS server, which proxies it to MikroTik
+        /// </summary>
+        public async Task<bool> UpdateBandwidthViaCoAAsync(string username, int downloadKbps, int uploadKbps)
+        {
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+                return false;
+
+            try
+            {
+                _logger.LogInformation("Updating bandwidth via FreeRADIUS CoA for {Username}: {Down}k/{Up}k",
+                    username, downloadKbps, uploadKbps);
+
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Get active session info
+                var sql = $@"SELECT framedipaddress, acctsessionid, nasipaddress 
+                            FROM {_tablePrefix}acct 
+                            WHERE username = @username AND acctstoptime IS NULL 
+                            ORDER BY acctstarttime DESC LIMIT 1";
+
+                using var cmd = new MySqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@username", username);
+
+                string? framedIp = null;
+                string? sessionId = null;
+                string? nasIp = null;
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    if (!await reader.ReadAsync())
+                    {
+                        _logger.LogDebug("No active session found for {Username}", username);
+                        return false;
+                    }
+
+                    framedIp = reader.IsDBNull(0) ? null : reader.GetString(0);
+                    sessionId = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    nasIp = reader.IsDBNull(2) ? null : reader.GetString(2);
+                }
+
+                if (string.IsNullOrEmpty(nasIp))
+                {
+                    _logger.LogWarning("Missing NAS IP for {Username}", username);
+                    return false;
+                }
+
+                // Get FreeRADIUS server address from configuration
+                var freeRadiusServer = _configuration.GetValue<string>("FreeRadius:Server") ?? "192.168.2.252";
+                var freeRadiusSecret = _configuration.GetValue<string>("FreeRadius:Secret") ?? "testing123";
+
+                // Send CoA bandwidth update to FreeRADIUS server
+                // FreeRADIUS will proxy it to MikroTik
+                var coaClient = new RadiusCoAClient(_logger, 5000);
+                var success = await coaClient.SendBandwidthUpdateAsync(
+                    freeRadiusServer,      // Send to FreeRADIUS, not MikroTik
+                    _coaPort,              // CoA port (default 3799)
+                    freeRadiusSecret,      // FreeRADIUS secret
+                    username,
+                    framedIp,
+                    sessionId,
+                    downloadKbps,
+                    uploadKbps,
+                    nasIp);                // Include NAS-IP so FreeRADIUS knows where to forward
+
+                if (success)
+                {
+                    _logger.LogInformation("Bandwidth updated via FreeRADIUS CoA for {Username}", username);
+
+                    // Also update radreply for future connections
+                    await UpdateRadreplyBandwidthAsync(connection, username, downloadKbps, uploadKbps);
+                }
+                else
+                {
+                    _logger.LogWarning("CoA bandwidth update failed for {Username}, updated radreply only", username);
+                    // Still update radreply so future connections get new bandwidth
+                    await UpdateRadreplyBandwidthAsync(connection, username, downloadKbps, uploadKbps);
+                }
+
+                return success;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating bandwidth via CoA for {Username}", username);
+                return false;
+            }
+        }
+
+        private async Task UpdateRadreplyBandwidthAsync(MySqlConnection connection, string username, int downloadKbps, int uploadKbps)
+        {
+            var rateLimit = $"{uploadKbps}k/{downloadKbps}k";
+
+            // Update Mikrotik-Rate-Limit
+            var sql = $@"UPDATE {_tablePrefix}reply SET value = @value 
+                        WHERE username = @username AND attribute = 'Mikrotik-Rate-Limit'";
+            using var cmd = new MySqlCommand(sql, connection);
+            cmd.Parameters.AddWithValue("@username", username);
+            cmd.Parameters.AddWithValue("@value", rateLimit);
+            await cmd.ExecuteNonQueryAsync();
+
+            // Update WISPr attributes
+            sql = $@"UPDATE {_tablePrefix}reply SET value = @value 
+                    WHERE username = @username AND attribute = 'WISPr-Bandwidth-Max-Down'";
+            using var cmd2 = new MySqlCommand(sql, connection);
+            cmd2.Parameters.AddWithValue("@username", username);
+            cmd2.Parameters.AddWithValue("@value", (downloadKbps * 1000).ToString());
+            await cmd2.ExecuteNonQueryAsync();
+
+            sql = $@"UPDATE {_tablePrefix}reply SET value = @value 
+                    WHERE username = @username AND attribute = 'WISPr-Bandwidth-Max-Up'";
+            using var cmd3 = new MySqlCommand(sql, connection);
+            cmd3.Parameters.AddWithValue("@username", username);
+            cmd3.Parameters.AddWithValue("@value", (uploadKbps * 1000).ToString());
+            await cmd3.ExecuteNonQueryAsync();
+
+            _logger.LogDebug("Updated radreply bandwidth for {Username}: {RateLimit}", username, rateLimit);
+        }
+
+        /// <summary>
+        /// Update bandwidth for a user in FreeRADIUS radreply table
+        /// Call this before UpdateBandwidthViaCoAAsync to ensure future connections also get new speed
+        /// </summary>
+        public async Task<bool> UpdateUserBandwidthAsync(string username, int downloadKbps, int uploadKbps)
+        {
+            await EnsureConfigLoadedAsync();
+
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+                return false;
+
+            try
+            {
+                _logger.LogInformation("Updating FreeRADIUS bandwidth for {Username}: {Down}k/{Up}k",
+                    username, downloadKbps, uploadKbps);
+
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                await UpdateRadreplyBandwidthAsync(connection, username, downloadKbps, uploadKbps);
+
+                _logger.LogInformation("FreeRADIUS bandwidth updated for {Username}", username);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating FreeRADIUS bandwidth for {Username}", username);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Disconnect a user session by removing from radacct
         /// Note: For real-time disconnect, use the builtin RADIUS server's CoA
         /// This method marks the session as closed in the database
@@ -785,7 +1045,7 @@ namespace HotelWifiPortal.Services.Radius
                                 acctterminatecause = 'Admin-Reset'
                             WHERE username = @username 
                             AND acctstoptime IS NULL";
-                
+
                 if (!string.IsNullOrEmpty(acctSessionId))
                     sql += " AND acctsessionid = @sessionId";
 
@@ -795,7 +1055,7 @@ namespace HotelWifiPortal.Services.Radius
                     cmd.Parameters.AddWithValue("@sessionId", acctSessionId);
 
                 var affected = await cmd.ExecuteNonQueryAsync();
-                
+
                 _logger.LogInformation("Disconnected {Count} session(s) for user {Username}", affected, username);
                 return affected > 0;
             }
@@ -809,19 +1069,19 @@ namespace HotelWifiPortal.Services.Radius
         /// <summary>
         /// Change of Authorization - Update session attributes
         /// </summary>
-        public async Task<bool> ChangeAuthorizationAsync(string nasIpAddress, string username, 
+        public async Task<bool> ChangeAuthorizationAsync(string nasIpAddress, string username,
             int? downloadKbps = null, int? uploadKbps = null, long? quotaBytes = null)
         {
             try
             {
                 _logger.LogInformation("Sending CoA-Request for {Username} to {NAS}", username, nasIpAddress);
-                
+
                 // CoA is typically sent directly via UDP - simplified implementation
                 // For full implementation, use the RadiusServer's CoA capabilities
-                
+
                 // Update the user's attributes in the database instead
                 // The router will pick up the changes on the next accounting update
-                
+
                 // Use stored connection string from configuration
                 if (string.IsNullOrEmpty(_connectionString))
                 {
@@ -836,14 +1096,14 @@ namespace HotelWifiPortal.Services.Radius
                 if (downloadKbps.HasValue && uploadKbps.HasValue)
                 {
                     var rateLimit = $"{uploadKbps}k/{downloadKbps}k";
-                    
+
                     // Delete existing rate limit
                     using var delCmd = new MySqlCommand(
                         $"DELETE FROM {_tablePrefix}reply WHERE username = @username AND attribute = 'Mikrotik-Rate-Limit'",
                         connection);
                     delCmd.Parameters.AddWithValue("@username", username);
                     await delCmd.ExecuteNonQueryAsync();
-                    
+
                     // Insert new rate limit
                     using var insCmd = new MySqlCommand(
                         $"INSERT INTO {_tablePrefix}reply (username, attribute, op, value) VALUES (@username, 'Mikrotik-Rate-Limit', ':=', @value)",
@@ -867,7 +1127,7 @@ namespace HotelWifiPortal.Services.Radius
 
         #region Group & NAS Management
 
-        public async Task<bool> CreateOrUpdateGroupAsync(string groupName, int downloadKbps, int uploadKbps, 
+        public async Task<bool> CreateOrUpdateGroupAsync(string groupName, int downloadKbps, int uploadKbps,
             long? quotaBytes = null, int? sessionTimeoutSecs = null)
         {
             if (!_isEnabled) return false;
@@ -958,10 +1218,10 @@ namespace HotelWifiPortal.Services.Radius
         public async Task SyncAllGuestsAsync()
         {
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
             {
-                _logger.LogWarning("SyncAllGuestsAsync: FreeRADIUS not enabled or no connection string. Enabled={Enabled}, HasConnStr={HasConnStr}", 
+                _logger.LogWarning("SyncAllGuestsAsync: FreeRADIUS not enabled or no connection string. Enabled={Enabled}, HasConnStr={HasConnStr}",
                     _isEnabled, !string.IsNullOrEmpty(_connectionString));
                 return;
             }
@@ -972,7 +1232,7 @@ namespace HotelWifiPortal.Services.Radius
                 var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
                 var guests = await dbContext.Guests
-                    .Where(g => g.Status.ToLower() == "checked-in" || 
+                    .Where(g => g.Status.ToLower() == "checked-in" ||
                                g.Status.ToLower() == "checkedin" ||
                                g.Status == "CheckedIn")
                     .ToListAsync();
@@ -1002,7 +1262,7 @@ namespace HotelWifiPortal.Services.Radius
         public async Task<int> ClearAllQuotaLimitsAsync()
         {
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
             {
                 _logger.LogWarning("ClearAllQuotaLimitsAsync: FreeRADIUS not enabled");
@@ -1050,9 +1310,9 @@ namespace HotelWifiPortal.Services.Radius
         public async Task<Dictionary<string, int>> GetTableStatsAsync()
         {
             await EnsureConfigLoadedAsync();
-            
+
             var stats = new Dictionary<string, int>();
-            
+
             if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
                 return stats;
 
@@ -1101,7 +1361,7 @@ namespace HotelWifiPortal.Services.Radius
         public async Task SyncBandwidthProfilesAsync()
         {
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled || string.IsNullOrEmpty(_connectionString)) return;
 
             try
@@ -1126,7 +1386,7 @@ namespace HotelWifiPortal.Services.Radius
                     Array.Empty<MySqlParameter>());
                 await ExecuteAsync(connection, $"DELETE FROM {_tablePrefix}groupreply WHERE groupname = 'vip'",
                     Array.Empty<MySqlParameter>());
-                
+
                 _logger.LogInformation("Cleared bandwidth from 'guests' and 'vip' groups - user bandwidth comes from radreply");
             }
             catch (Exception ex)
@@ -1138,7 +1398,7 @@ namespace HotelWifiPortal.Services.Radius
         public async Task CleanupCheckedOutGuestsAsync()
         {
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled || string.IsNullOrEmpty(_connectionString)) return;
 
             try
@@ -1152,7 +1412,7 @@ namespace HotelWifiPortal.Services.Radius
 
                 foreach (var guest in checkedOutGuests)
                     await RemoveUserAsync(guest.RoomNumber);
-                    
+
                 _logger.LogInformation("Cleaned up {Count} checked-out guests from FreeRADIUS", checkedOutGuests.Count);
             }
             catch (Exception ex)
@@ -1288,13 +1548,13 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
         {
             // Always load config first
             await EnsureConfigLoadedAsync();
-            
+
             if (!_isEnabled)
             {
                 _logger.LogWarning("InitializeDatabaseAsync: FreeRADIUS is not enabled");
                 throw new InvalidOperationException("FreeRADIUS is not enabled. Please enable it in settings first.");
             }
-            
+
             if (string.IsNullOrEmpty(_connectionString))
             {
                 _logger.LogWarning("InitializeDatabaseAsync: Connection string is empty");
@@ -1304,7 +1564,7 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
             try
             {
                 _logger.LogInformation("Connecting to MySQL with connection string length: {Length}", _connectionString.Length);
-                
+
                 using var connection = new MySqlConnection(_connectionString);
                 await connection.OpenAsync();
                 _logger.LogInformation("Connected to MySQL successfully");
@@ -1339,7 +1599,7 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
                 throw; // Re-throw to show actual error to user
             }
         }
-        
+
         /// <summary>
         /// Delete a specific user from FreeRADIUS
         /// </summary>
@@ -1386,7 +1646,7 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
         public async Task<(int deleted, string message)> DeleteAllUsersAsync()
         {
             await EnsureConfigLoadedAsync();
-            if (!_isEnabled || string.IsNullOrEmpty(_connectionString)) 
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
                 return (0, "FreeRADIUS not enabled");
 
             try
@@ -1430,7 +1690,7 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
         public async Task<FreeRadiusTestResult> TestConnectionAsync()
         {
             await EnsureConfigLoadedAsync();
-            
+
             var result = new FreeRadiusTestResult { IsEnabled = _isEnabled };
 
             if (!_isEnabled)
@@ -1473,7 +1733,7 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
                         (SELECT COUNT(DISTINCT username) FROM `{_tablePrefix}check`) as users,
                         (SELECT COUNT(*) FROM `{_tablePrefix}acct` WHERE acctstoptime IS NULL) as active_sessions,
                         (SELECT COUNT(*) FROM `nas`) as nas_count", connection);
-                
+
                 using var reader = await statsCmd.ExecuteReaderAsync();
                 if (await reader.ReadAsync())
                 {
@@ -1541,13 +1801,13 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
                     SELECT COUNT(DISTINCT callingstationid) 
                     FROM {_tablePrefix}acct 
                     WHERE username = @username AND acctstoptime IS NULL";
-                
+
                 using var cmd = new MySqlCommand(sql, connection);
                 cmd.Parameters.AddWithValue("@username", username);
-                
+
                 var result = await cmd.ExecuteScalarAsync();
                 var count = Convert.ToInt32(result ?? 0);
-                
+
                 _logger.LogDebug("Room {Room} has {Count} active device(s)", username, count);
                 return count;
             }
@@ -1772,11 +2032,11 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
             }
 
             var syncInterval = _configuration.GetValue("FreeRadius:SyncIntervalMinutes", 5);
-            
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromMinutes(syncInterval), stoppingToken);
-                
+
                 try
                 {
                     using var scope = _serviceProvider.CreateScope();

@@ -1,6 +1,7 @@
 using HotelWifiPortal.Data;
 using HotelWifiPortal.Models.Entities;
 using HotelWifiPortal.Services.PMS;
+using HotelWifiPortal.Services.Radius;
 using Microsoft.EntityFrameworkCore;
 
 namespace HotelWifiPortal.Services
@@ -10,22 +11,25 @@ namespace HotelWifiPortal.Services
         private readonly ApplicationDbContext _dbContext;
         private readonly QuotaService _quotaService;
         private readonly FiasSocketServer _fiasServer;
+        private readonly FreeRadiusService _freeRadiusService;
         private readonly ILogger<PaymentService> _logger;
 
         public PaymentService(
             ApplicationDbContext dbContext,
             QuotaService quotaService,
             FiasSocketServer fiasServer,
+            FreeRadiusService freeRadiusService,
             ILogger<PaymentService> logger)
         {
             _dbContext = dbContext;
             _quotaService = quotaService;
             _fiasServer = fiasServer;
+            _freeRadiusService = freeRadiusService;
             _logger = logger;
         }
 
         public async Task<(bool Success, PaymentTransaction? Transaction, string? Error)> PurchasePackageAsync(
-            int guestId, 
+            int guestId,
             int packageId)
         {
             var guest = await _dbContext.Guests.FindAsync(guestId);
@@ -67,14 +71,17 @@ namespace HotelWifiPortal.Services
                 await _quotaService.AddPaidQuotaAsync(guest, package);
                 _logger.LogInformation("Quota added to guest. New total: {Total}GB", guest.TotalQuotaGB);
 
+                // Apply new bandwidth from paid package immediately via CoA
+                await ApplyPaidPackageBandwidthAsync(guest, package);
+
                 // Try to post charge to PMS
                 var pmsSettings = await _dbContext.PmsSettings.FirstOrDefaultAsync();
-                
+
                 if (pmsSettings?.IsEnabled == true && pmsSettings.AutoPostCharges)
                 {
-                    _logger.LogInformation("PMS auto-posting enabled. Posting by {Mode}...", 
+                    _logger.LogInformation("PMS auto-posting enabled. Posting by {Mode}...",
                         pmsSettings.PostByReservationNumber ? "Reservation Number" : "Room Number");
-                    
+
                     if (_fiasServer.IsConnected)
                     {
                         try
@@ -91,8 +98,8 @@ namespace HotelWifiPortal.Services
                             transaction.PostedToPMSAt = DateTime.UtcNow;
                             transaction.Status = "PostedToPMS";
                             transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
-                            transaction.PMSResponse = pmsSettings.PostByReservationNumber 
-                                ? $"Success (by Reservation# {guest.ReservationNumber})" 
+                            transaction.PMSResponse = pmsSettings.PostByReservationNumber
+                                ? $"Success (by Reservation# {guest.ReservationNumber})"
                                 : $"Success (by Room {guest.RoomNumber})";
 
                             _logger.LogInformation("✓ Charge posted to PMS successfully: {Identifier}, Amount {Currency} {Amount}",
@@ -145,6 +152,111 @@ namespace HotelWifiPortal.Services
 
                 _logger.LogError(ex, "Payment processing failed for guest {GuestId}", guestId);
                 return (false, transaction, "Payment processing failed. Please contact reception.");
+            }
+        }
+
+        /// <summary>
+        /// Apply the paid package bandwidth to the guest immediately via CoA
+        /// Also handles the case where guest's free quota was exceeded
+        /// </summary>
+        private async Task ApplyPaidPackageBandwidthAsync(Guest guest, PaidPackage package)
+        {
+            try
+            {
+                // Get bandwidth from paid package
+                int downloadKbps = package.DownloadSpeedKbps ?? package.SpeedLimitKbps ?? 50000; // Default 50Mbps for paid
+                int uploadKbps = package.UploadSpeedKbps ?? package.SpeedLimitKbps ?? 25000;     // Default 25Mbps for paid
+
+                _logger.LogInformation("Applying paid package for Room {Room}: Bandwidth={Down}k/{Up}k, QuotaExceeded={Exceeded}",
+                    guest.RoomNumber, downloadKbps, uploadKbps, guest.IsQuotaExhausted);
+
+                // Check if guest was quota exceeded before purchase
+                bool wasQuotaExceeded = guest.IsQuotaExhausted;
+
+                // First, update FreeRADIUS with new quota and bandwidth
+                // This updates radcheck (Max-Total-Data) and radreply (bandwidth)
+                await _freeRadiusService.CreateOrUpdateUserAsync(guest);
+
+                // Also explicitly update bandwidth in radreply
+                await _freeRadiusService.UpdateUserBandwidthAsync(guest.RoomNumber, downloadKbps, uploadKbps);
+
+                // Now apply via CoA
+                if (wasQuotaExceeded)
+                {
+                    // If quota was exceeded, the session might be blocked/terminated
+                    // We need to disconnect and let them reconnect with new quota
+                    _logger.LogInformation("Guest was quota exceeded - disconnecting to allow reconnect with new quota");
+
+                    var disconnected = await _freeRadiusService.DisconnectUserByUsernameAsync(guest.RoomNumber);
+
+                    if (disconnected)
+                    {
+                        _logger.LogInformation("✓ Guest disconnected - will reconnect with new paid package bandwidth and quota");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Could not disconnect guest - they may need to reconnect manually");
+                    }
+                }
+                else
+                {
+                    // Guest still has quota - just update bandwidth via CoA (no disconnect needed)
+                    var coaSuccess = await _freeRadiusService.UpdateBandwidthViaCoAAsync(
+                        guest.RoomNumber,
+                        downloadKbps,
+                        uploadKbps);
+
+                    if (coaSuccess)
+                    {
+                        _logger.LogInformation("✓ Paid package bandwidth applied immediately via CoA for Room {Room}",
+                            guest.RoomNumber);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("CoA failed for Room {Room} - bandwidth will apply on next reconnect",
+                            guest.RoomNumber);
+                    }
+                }
+
+                // Update any QuotaExceeded sessions to Active
+                await ReactivateQuotaExceededSessionsAsync(guest);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error applying paid package bandwidth for Room {Room}", guest.RoomNumber);
+                // Don't fail the purchase, bandwidth will apply on next reconnect
+            }
+        }
+
+        /// <summary>
+        /// Reactivate any sessions that were marked as QuotaExceeded
+        /// </summary>
+        private async Task ReactivateQuotaExceededSessionsAsync(Guest guest)
+        {
+            try
+            {
+                var exceededSessions = await _dbContext.WifiSessions
+                    .Where(s => s.GuestId == guest.Id && s.Status == "QuotaExceeded")
+                    .ToListAsync();
+
+                foreach (var session in exceededSessions)
+                {
+                    session.Status = "Active";
+                    session.LastActivity = DateTime.UtcNow;
+                    _logger.LogInformation("Reactivated QuotaExceeded session {SessionId} for Room {Room}",
+                        session.Id, guest.RoomNumber);
+                }
+
+                if (exceededSessions.Any())
+                {
+                    await _dbContext.SaveChangesAsync();
+                    _logger.LogInformation("Reactivated {Count} QuotaExceeded session(s) for Room {Room}",
+                        exceededSessions.Count, guest.RoomNumber);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error reactivating sessions for Room {Room}", guest.RoomNumber);
             }
         }
 
@@ -205,7 +317,7 @@ namespace HotelWifiPortal.Services
             {
                 transaction.PMSResponse = $"Retry failed: {ex.Message}";
                 await _dbContext.SaveChangesAsync();
-                
+
                 _logger.LogError(ex, "Failed to retry PMS posting for transaction {Id}", transactionId);
                 return false;
             }
