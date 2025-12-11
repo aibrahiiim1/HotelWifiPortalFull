@@ -39,7 +39,7 @@ namespace HotelWifiPortal.Services.WiFi
         private readonly IServiceProvider _serviceProvider;
         private readonly Dictionary<string, IWifiController> _controllers = new();
 
-        public WifiService(ApplicationDbContext dbContext, WifiControllerFactory controllerFactory,
+        public WifiService(ApplicationDbContext dbContext, WifiControllerFactory controllerFactory, 
             ILogger<WifiService> logger, IServiceProvider serviceProvider)
         {
             _dbContext = dbContext;
@@ -129,9 +129,9 @@ namespace HotelWifiPortal.Services.WiFi
                 };
 
                 _dbContext.WifiSessions.Add(session);
-
+                
                 guest.LastWifiLogin = DateTime.UtcNow;
-
+                
                 await _dbContext.SaveChangesAsync();
             }
 
@@ -177,17 +177,17 @@ namespace HotelWifiPortal.Services.WiFi
         public async Task UpdateSessionUsageAsync()
         {
             var activeSessions = await GetActiveSessionsAsync();
-
+            
             // First, try to sync from FreeRADIUS if enabled
             bool freeRadiusSynced = await SyncFromFreeRadiusAsync(activeSessions);
-
+            
             // If FreeRADIUS sync worked, we're done
             if (freeRadiusSynced)
             {
                 await _dbContext.SaveChangesAsync();
                 return;
             }
-
+            
             // Otherwise, try to get usage from WiFi controller directly
             var controller = await GetDefaultControllerAsync();
             if (controller == null) return;
@@ -240,7 +240,7 @@ namespace HotelWifiPortal.Services.WiFi
                     .Where(s => s.Key == "FreeRadiusEnabled")
                     .Select(s => s.Value)
                     .FirstOrDefaultAsync();
-
+                
                 if (freeRadiusEnabled?.ToLower() != "true")
                 {
                     _logger.LogDebug("FreeRADIUS not enabled, skipping sync");
@@ -278,8 +278,8 @@ namespace HotelWifiPortal.Services.WiFi
                         var macClean = session.MacAddress?.ToLower().Replace(":", "").Replace("-", "") ?? "";
                         var macWithColons = session.MacAddress?.ToUpper() ?? "";
                         var macWithDashes = session.MacAddress?.ToUpper().Replace(":", "-") ?? "";
-
-                        _logger.LogDebug("Syncing session: Room={Room}, MAC={Mac}, SessionId={SessionId}",
+                        
+                        _logger.LogDebug("Syncing session: Room={Room}, MAC={Mac}, SessionId={SessionId}", 
                             session.RoomNumber, session.MacAddress, session.RadiusSessionId);
 
                         long inputBytes = 0, outputBytes = 0;
@@ -346,17 +346,17 @@ namespace HotelWifiPortal.Services.WiFi
                             session.BytesUploaded = outputBytes;
                             session.BytesUsed = totalBytes;
                             session.LastActivity = DateTime.UtcNow;
-
+                            
                             // If session has ended in FreeRADIUS, mark it as Disconnected
                             if (lastStop.HasValue && session.Status == "Active")
                             {
                                 session.Status = "Disconnected";
                                 session.SessionEnd = lastStop;
                             }
-
+                            
                             _dbContext.Entry(session).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
 
-                            _logger.LogDebug("Updated session {Id} for Room={Room} MAC={Mac}: BytesUsed={Total}MB",
+                            _logger.LogDebug("Updated session {Id} for Room={Room} MAC={Mac}: BytesUsed={Total}MB", 
                                 session.Id, session.RoomNumber, session.MacAddress, totalBytes / 1048576.0);
                         }
                     }
@@ -369,13 +369,13 @@ namespace HotelWifiPortal.Services.WiFi
                 // APPROACH 2: Also sync directly to all checked-in guests by room number
                 // This handles cases where the session might not exist but usage does
                 _logger.LogInformation("=== Syncing usage directly to guests ===");
-
+                
                 var checkedInGuests = await _dbContext.Guests
-                    .Where(g => g.Status.ToLower() == "checked-in" ||
+                    .Where(g => g.Status.ToLower() == "checked-in" || 
                                g.Status.ToLower() == "checkedin" ||
                                g.Status == "CheckedIn")
                     .ToListAsync();
-
+                
                 _logger.LogInformation("Found {Count} checked-in guests to sync", checkedInGuests.Count);
 
                 foreach (var guest in checkedInGuests)
@@ -410,7 +410,7 @@ namespace HotelWifiPortal.Services.WiFi
                                 {
                                     guest.UsedQuotaBytes = totalBytes;
                                     _dbContext.Entry(guest).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
-                                    _logger.LogInformation("Updated guest {Room} UsedQuotaBytes to {Total}MB",
+                                    _logger.LogInformation("Updated guest {Room} UsedQuotaBytes to {Total}MB", 
                                         guest.RoomNumber, totalBytes / 1048576.0);
                                 }
                             }
@@ -463,7 +463,7 @@ namespace HotelWifiPortal.Services.WiFi
 
                 using var cmd = new MySqlConnector.MySqlCommand(sql, connection);
                 using var reader = await cmd.ExecuteReaderAsync();
-
+                
                 var newSessions = new List<(string username, string mac, string sessionId, DateTime start, string ip, long bytesIn, long bytesOut)>();
                 while (await reader.ReadAsync())
                 {
@@ -474,7 +474,7 @@ namespace HotelWifiPortal.Services.WiFi
                     var ip = reader.IsDBNull(4) ? "" : reader.GetString(4);
                     var bytesIn = reader.GetInt64(5);
                     var bytesOut = reader.GetInt64(6);
-
+                    
                     newSessions.Add((username, mac, sessionId, start, ip, bytesIn, bytesOut));
                 }
                 await reader.CloseAsync();
@@ -487,22 +487,22 @@ namespace HotelWifiPortal.Services.WiFi
                     {
                         // Normalize MAC
                         var normalizedMac = mac.ToUpper().Replace("-", ":");
-
+                        
                         // Check if this specific session already exists in portal (by RadiusSessionId)
                         WifiSession? existingSession = null;
-
+                        
                         if (!string.IsNullOrEmpty(sessionId))
                         {
                             existingSession = await _dbContext.WifiSessions
                                 .FirstOrDefaultAsync(s => s.RadiusSessionId == sessionId);
                         }
-
+                        
                         // Fallback: check by MAC + Room + Active/QuotaExceeded status (only if no sessionId match)
                         if (existingSession == null)
                         {
                             existingSession = await _dbContext.WifiSessions
-                                .FirstOrDefaultAsync(s =>
-                                    (s.MacAddress == normalizedMac || s.MacAddress == mac) &&
+                                .FirstOrDefaultAsync(s => 
+                                    (s.MacAddress == normalizedMac || s.MacAddress == mac) && 
                                     s.RoomNumber == username &&
                                     (s.Status == "Active" || s.Status == "QuotaExceeded") &&
                                     string.IsNullOrEmpty(s.RadiusSessionId));
@@ -523,7 +523,7 @@ namespace HotelWifiPortal.Services.WiFi
 
                         // Find guest by username (room number)
                         var guest = await _dbContext.Guests
-                            .FirstOrDefaultAsync(g => g.RoomNumber == username &&
+                            .FirstOrDefaultAsync(g => g.RoomNumber == username && 
                                 (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"));
 
                         if (guest == null)
@@ -552,7 +552,7 @@ namespace HotelWifiPortal.Services.WiFi
                         };
 
                         _dbContext.WifiSessions.Add(newSession);
-                        _logger.LogInformation("Created new session from FreeRADIUS: Room={Room}, MAC={Mac}, SessionId={SessionId}",
+                        _logger.LogInformation("Created new session from FreeRADIUS: Room={Room}, MAC={Mac}, SessionId={SessionId}", 
                             guest.RoomNumber, normalizedMac, sessionId);
                     }
                     catch (Exception ex)
@@ -562,7 +562,7 @@ namespace HotelWifiPortal.Services.WiFi
                 }
 
                 await _dbContext.SaveChangesAsync();
-
+                
                 // Also mark sessions as disconnected if they're no longer active in FreeRADIUS
                 await MarkDisconnectedSessionsAsync(connection, tablePrefix);
             }
@@ -592,7 +592,7 @@ namespace HotelWifiPortal.Services.WiFi
                 // Build a query to check which sessions have ended in FreeRADIUS
                 var sessionIds = activeSessions.Select(s => s.RadiusSessionId).ToList();
                 var placeholders = string.Join(",", sessionIds.Select((_, i) => $"@sid{i}"));
-
+                
                 var sql = $@"
                     SELECT acctsessionid, acctstoptime, 
                            COALESCE(acctinputoctets, 0) as bytes_in,
@@ -608,7 +608,7 @@ namespace HotelWifiPortal.Services.WiFi
                 }
 
                 var endedSessions = new Dictionary<string, (DateTime stopTime, long bytesIn, long bytesOut)>();
-
+                
                 using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
@@ -682,9 +682,9 @@ namespace HotelWifiPortal.Services.WiFi
             {
                 var settings = await _dbContext.WifiControllerSettings
                     .FirstOrDefaultAsync(s => s.ControllerType == controllerType);
-
+                
                 if (settings == null) return false;
-
+                
                 controller = _controllerFactory.CreateController(settings);
             }
 
@@ -696,18 +696,18 @@ namespace HotelWifiPortal.Services.WiFi
         public async Task CheckQuotaExceededAsync()
         {
             var controller = await GetDefaultControllerAsync();
-
+            
             // Get MikroTik IP for CoA disconnect
             var mikrotikIpSetting = await _dbContext.SystemSettings
                 .FirstOrDefaultAsync(s => s.Key == "MikroTikHotspotIp");
             var mikrotikIp = mikrotikIpSetting?.Value ?? "";
-
+            
             // Check if FreeRADIUS is enabled - if so, query radacct directly
             var freeRadiusEnabled = await _dbContext.SystemSettings
                 .Where(s => s.Key == "FreeRadiusEnabled")
                 .Select(s => s.Value)
                 .FirstOrDefaultAsync();
-
+                
             if (freeRadiusEnabled?.ToLower() == "true")
             {
                 // Use FreeRADIUS radacct for accurate usage data
@@ -751,7 +751,7 @@ namespace HotelWifiPortal.Services.WiFi
 
                 // Get all checked-in guests with quota limits
                 var guests = await _dbContext.Guests
-                    .Where(g => (g.Status.ToLower() == "checked-in" ||
+                    .Where(g => (g.Status.ToLower() == "checked-in" || 
                                 g.Status.ToLower() == "checkedin" ||
                                 g.Status == "CheckedIn") &&
                                (g.FreeQuotaBytes + g.PaidQuotaBytes) > 0)
@@ -841,7 +841,7 @@ namespace HotelWifiPortal.Services.WiFi
             // Get guests that MIGHT be over quota based on stored UsedQuotaBytes
             // We'll verify against actual radacct data before marking sessions
             var guestsOverQuota = await _dbContext.Guests
-                .Where(g => (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn") &&
+                .Where(g => (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn") && 
                             g.UsedQuotaBytes >= (g.FreeQuotaBytes + g.PaidQuotaBytes) &&
                             (g.FreeQuotaBytes + g.PaidQuotaBytes) > 0)
                 .ToListAsync();
@@ -855,7 +855,7 @@ namespace HotelWifiPortal.Services.WiFi
                 .Where(s => s.Key == "FreeRadiusConnectionString")
                 .Select(s => s.Value)
                 .FirstOrDefaultAsync();
-
+            
             if (string.IsNullOrEmpty(connectionString))
             {
                 _logger.LogWarning("FreeRADIUS not configured, cannot verify quota from radacct");
@@ -886,13 +886,13 @@ namespace HotelWifiPortal.Services.WiFi
                     var actualBytes = Convert.ToInt64(await usageCmd.ExecuteScalarAsync() ?? 0L);
 
                     var quotaBytes = guest.FreeQuotaBytes + guest.PaidQuotaBytes;
-
+                    
                     // Only mark as exceeded if ACTUAL usage exceeds quota
                     if (actualBytes < quotaBytes)
                     {
                         _logger.LogDebug("Room {Room}: Stored UsedQuotaBytes={Stored}MB but actual active usage={Actual}MB, quota={Quota}MB - NOT exceeded",
                             guest.RoomNumber, guest.UsedQuotaBytes / 1048576.0, actualBytes / 1048576.0, quotaBytes / 1048576.0);
-
+                        
                         // Update UsedQuotaBytes to actual value
                         if (guest.UsedQuotaBytes != actualBytes)
                         {
@@ -903,7 +903,7 @@ namespace HotelWifiPortal.Services.WiFi
 
                     // Mark ALL sessions for this guest by BOTH GuestId AND RoomNumber
                     var sessions = await _dbContext.WifiSessions
-                        .Where(s => (s.GuestId == guest.Id || s.RoomNumber == guest.RoomNumber) &&
+                        .Where(s => (s.GuestId == guest.Id || s.RoomNumber == guest.RoomNumber) && 
                                     s.Status == "Active")
                         .ToListAsync();
 
@@ -911,7 +911,7 @@ namespace HotelWifiPortal.Services.WiFi
                     {
                         _logger.LogWarning("=== ROOM {Room} EXCEEDED QUOTA: {Used}MB / {Total}MB ===",
                             guest.RoomNumber, actualBytes / 1048576.0, quotaBytes / 1048576.0);
-                        _logger.LogInformation("Disconnecting {Count} active sessions for Room {Room}",
+                        _logger.LogInformation("Disconnecting {Count} active sessions for Room {Room}", 
                             sessions.Count, guest.RoomNumber);
                     }
 
@@ -921,16 +921,16 @@ namespace HotelWifiPortal.Services.WiFi
                         // FreeRADIUS check_quota.sh handles actual disconnect!
                         session.Status = "QuotaExceeded";
                         session.SessionEnd = DateTime.UtcNow;
-
+                        
                         // Ensure GuestId is set correctly
                         if (session.GuestId != guest.Id)
                         {
                             session.GuestId = guest.Id;
                         }
-
-                        _logger.LogInformation("Portal: Marked session {Mac} as QuotaExceeded for Room {Room}",
+                        
+                        _logger.LogInformation("Portal: Marked session {Mac} as QuotaExceeded for Room {Room}", 
                             session.MacAddress, guest.RoomNumber);
-
+                        
                         // NOTE: We do NOT send CoA disconnect from portal!
                         // FreeRADIUS check_quota.sh script handles enforcement
                     }
@@ -961,7 +961,7 @@ namespace HotelWifiPortal.Services.WiFi
         {
             // Wait a bit for app to start
             await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-
+            
             while (!stoppingToken.IsCancellationRequested)
             {
                 try

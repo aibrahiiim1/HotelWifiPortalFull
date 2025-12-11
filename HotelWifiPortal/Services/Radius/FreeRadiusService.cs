@@ -145,11 +145,17 @@ namespace HotelWifiPortal.Services.Radius
                 // GET PACKAGE SETTINGS FOR SharedUsage
                 // ============================================
                 bool sharedUsage = true; // Default: room-level quota
-                int downloadKbps = profile?.DownloadSpeedKbps ?? 10240;
-                int uploadKbps = profile?.UploadSpeedKbps ?? 5120;
                 bool sharedBandwidth = true;
+                int maxDevices = 3;
+                
+                // Start with hardcoded defaults (ignore profile for bandwidth - use packages only)
+                int downloadKbps = 10240; // 10 Mbps default
+                int uploadKbps = 5120;    // 5 Mbps default
+                
+                _logger.LogInformation("Starting with default bandwidth: Download={Down}kbps, Upload={Up}kbps", 
+                    downloadKbps, uploadKbps);
 
-                // Check for active paid package
+                // Check for active paid package FIRST
                 var activePaidPackage = await dbContext.PaymentTransactions
                     .Where(t => t.GuestId == guest.Id && 
                                t.Status == "Completed" &&
@@ -164,28 +170,107 @@ namespace HotelWifiPortal.Services.Radius
                     var paidPackage = await dbContext.PaidPackages.FindAsync(activePaidPackage);
                     if (paidPackage != null)
                     {
-                        downloadKbps = paidPackage.DownloadSpeedKbps ?? 20480;
-                        uploadKbps = paidPackage.UploadSpeedKbps ?? 10240;
+                        // Use specific speeds first, then generic SpeedLimitKbps, then keep defaults
+                        downloadKbps = paidPackage.DownloadSpeedKbps ?? paidPackage.SpeedLimitKbps ?? downloadKbps;
+                        uploadKbps = paidPackage.UploadSpeedKbps ?? paidPackage.SpeedLimitKbps ?? uploadKbps;
                         sharedBandwidth = paidPackage.SharedBandwidth;
                         sharedUsage = paidPackage.SharedUsage;
+                        maxDevices = paidPackage.MaxDevices;
+                        _logger.LogInformation("Using Paid Package: {Name}, Download={Down}kbps, Upload={Up}kbps, SharedBW={Shared}",
+                            paidPackage.Name, downloadKbps, uploadKbps, sharedBandwidth);
                     }
                 }
                 else
                 {
                     // Check free package based on stay length
-                    var stayLength = (guest.DepartureDate - guest.ArrivalDate).Days;
-                    var freePackage = await dbContext.BandwidthPackages
-                        .Where(p => p.IsActive && p.MinStayDays <= stayLength)
+                    var stayLength = Math.Max(1, (guest.DepartureDate - guest.ArrivalDate).Days);
+                    _logger.LogInformation("Guest {Room}: StayLength={Days} days (Arrival={Arrival}, Departure={Departure})",
+                        guest.RoomNumber, stayLength, guest.ArrivalDate, guest.DepartureDate);
+                    
+                    // Find ALL active free packages
+                    var freePackages = await dbContext.BandwidthPackages
+                        .Where(p => p.IsActive)
                         .OrderByDescending(p => p.MinStayDays)
-                        .FirstOrDefaultAsync();
+                        .ToListAsync();
+                    
+                    _logger.LogInformation("Found {Count} active free packages:", freePackages.Count);
+                    
+                    foreach (var pkg in freePackages)
+                    {
+                        _logger.LogInformation("  Package: {Name}, MinStay={Min}, MaxStay={Max}, DL={DL}kbps, UL={UL}kbps, SpeedLimit={SL}kbps, IsActive={Active}",
+                            pkg.Name, pkg.MinStayDays, pkg.MaxStayDays, 
+                            pkg.DownloadSpeedKbps, pkg.UploadSpeedKbps, pkg.SpeedLimitKbps, pkg.IsActive);
+                    }
+                    
+                    // Try to find matching package by stay length
+                    var freePackage = freePackages
+                        .FirstOrDefault(p => p.MinStayDays <= stayLength && 
+                            (p.MaxStayDays == null || p.MaxStayDays >= stayLength));
+
+                    // If no match found, use the first available package (fallback)
+                    if (freePackage == null && freePackages.Any())
+                    {
+                        freePackage = freePackages.OrderBy(p => p.MinStayDays).First();
+                        _logger.LogWarning("No package matched StayLength={Days}, using fallback package: {Name}", 
+                            stayLength, freePackage.Name);
+                    }
 
                     if (freePackage != null)
                     {
-                        downloadKbps = freePackage.DownloadSpeedKbps ?? 10240;
-                        uploadKbps = freePackage.UploadSpeedKbps ?? 5120;
+                        // Use specific speeds first, then generic SpeedLimitKbps, then keep defaults
+                        var pkgDownload = freePackage.DownloadSpeedKbps ?? freePackage.SpeedLimitKbps;
+                        var pkgUpload = freePackage.UploadSpeedKbps ?? freePackage.SpeedLimitKbps;
+                        
+                        if (pkgDownload.HasValue && pkgDownload.Value > 0)
+                            downloadKbps = pkgDownload.Value;
+                        if (pkgUpload.HasValue && pkgUpload.Value > 0)
+                            uploadKbps = pkgUpload.Value;
+                            
                         sharedBandwidth = freePackage.SharedBandwidth;
                         sharedUsage = freePackage.SharedUsage;
+                        maxDevices = freePackage.MaxDevices > 0 ? freePackage.MaxDevices : 3;
+                        
+                        _logger.LogInformation("MATCHED Free Package: {Name}, Download={Down}kbps, Upload={Up}kbps, SharedBW={Shared}",
+                            freePackage.Name, downloadKbps, uploadKbps, sharedBandwidth);
                     }
+                    else
+                    {
+                        _logger.LogWarning("NO free packages found! Using hardcoded defaults: {Down}k/{Up}k",
+                            downloadKbps, uploadKbps);
+                    }
+                }
+
+                // ============================================
+                // BANDWIDTH HANDLING FOR SHARED VS PER-DEVICE
+                // ============================================
+                int effectiveDownloadKbps = downloadKbps;
+                int effectiveUploadKbps = uploadKbps;
+
+                if (sharedBandwidth)
+                {
+                    // Count active devices for this room from radacct
+                    var activeDeviceCount = await CountActiveDevicesAsync(connection, guest.RoomNumber);
+                    
+                    // Add 1 for the device that's about to connect (if it's a new connection)
+                    // We assume worst case (max devices) if we can't count
+                    if (activeDeviceCount == 0)
+                    {
+                        activeDeviceCount = 1; // At least this device
+                    }
+                    
+                    // Divide bandwidth among devices
+                    // Use ceiling to ensure minimum bandwidth per device
+                    effectiveDownloadKbps = Math.Max(1024, downloadKbps / activeDeviceCount); // Min 1 Mbps
+                    effectiveUploadKbps = Math.Max(512, uploadKbps / activeDeviceCount);      // Min 0.5 Mbps
+                    
+                    _logger.LogInformation("Shared Bandwidth: Room {Room} has {Devices} active device(s). Speed per device: {Down}k/{Up}k (Total: {TotalDown}k/{TotalUp}k)",
+                        guest.RoomNumber, activeDeviceCount, effectiveDownloadKbps, effectiveUploadKbps, downloadKbps, uploadKbps);
+                }
+                else
+                {
+                    // Each device gets full speed
+                    _logger.LogInformation("Per-Device Bandwidth: Each device gets full speed: {Down}k/{Up}k",
+                        downloadKbps, uploadKbps);
                 }
 
                 // ============================================
@@ -197,10 +282,10 @@ namespace HotelWifiPortal.Services.Radius
                 long quotaForDevice = 0;
                 if (!sharedUsage)
                 {
-                    // Per-device quota mode
-                    int maxDevices = 3;
+                    // Per-device quota mode - use maxDevices from package settings
                     quotaForDevice = remainingQuota / maxDevices;
-                    _logger.LogDebug("FreeRADIUS: Per-device quota mode: {Quota}MB per device", quotaForDevice / 1048576);
+                    _logger.LogDebug("FreeRADIUS: Per-device quota mode: {Quota}MB per device (maxDevices={Max})", 
+                        quotaForDevice / 1048576, maxDevices);
                 }
                 else
                 {
@@ -268,13 +353,15 @@ namespace HotelWifiPortal.Services.Radius
                         ("Reply-Message", "=", $"Welcome {guest.GuestName}! Room {guest.RoomNumber}")
                     };
 
-                    // Speed limit attributes - use calculated speeds with shared bandwidth logic
-                    if (downloadKbps > 0 && uploadKbps > 0)
+                    // Speed limit attributes - use effective speeds (considering shared bandwidth)
+                    if (effectiveDownloadKbps > 0 && effectiveUploadKbps > 0)
                     {
-                        var rateLimit = $"{uploadKbps}k/{downloadKbps}k";
+                        var rateLimit = $"{effectiveUploadKbps}k/{effectiveDownloadKbps}k";
                         replyAttributes.Add(("Mikrotik-Rate-Limit", ":=", rateLimit));
-                        replyAttributes.Add(("WISPr-Bandwidth-Max-Up", ":=", (uploadKbps * 1000).ToString()));
-                        replyAttributes.Add(("WISPr-Bandwidth-Max-Down", ":=", (downloadKbps * 1000).ToString()));
+                        replyAttributes.Add(("WISPr-Bandwidth-Max-Up", ":=", (effectiveUploadKbps * 1000).ToString()));
+                        replyAttributes.Add(("WISPr-Bandwidth-Max-Down", ":=", (effectiveDownloadKbps * 1000).ToString()));
+                        
+                        _logger.LogInformation("Setting rate limit for {User}: {RateLimit}", username, rateLimit);
                     }
 
                     // Data limit attributes - ONLY send if SharedUsage is false (per-device quota)
@@ -302,11 +389,13 @@ namespace HotelWifiPortal.Services.Radius
                             }, transaction);
                     }
 
-                    // Update user group
+                    // Update user group - use generic "guests" group (no bandwidth in group)
+                    // User-specific bandwidth is set in radreply which takes precedence
                     await ExecuteAsync(connection, $"DELETE FROM {_tablePrefix}usergroup WHERE username = @username",
                         new MySqlParameter("@username", username), transaction);
 
-                    var groupName = DetermineGroupName(guest, profile);
+                    // Use "guests" group for all users - bandwidth comes from radreply, not group
+                    var groupName = "guests";
                     await ExecuteAsync(connection, $@"
                         INSERT INTO {_tablePrefix}usergroup (username, groupname, priority)
                         VALUES (@username, @groupname, 1)",
@@ -357,6 +446,133 @@ namespace HotelWifiPortal.Services.Radius
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error removing FreeRADIUS user {Username}", username);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Update bandwidth limit for a room based on active device count
+        /// Call this when a device connects or disconnects
+        /// </summary>
+        public async Task<bool> UpdateRoomBandwidthAsync(string roomNumber)
+        {
+            await EnsureConfigLoadedAsync();
+            
+            if (!_isEnabled || string.IsNullOrEmpty(_connectionString))
+                return false;
+
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                
+                // Get guest for this room
+                var guest = await dbContext.Guests
+                    .FirstOrDefaultAsync(g => g.RoomNumber == roomNumber && 
+                        (g.Status == "checked-in" || g.Status == "Checked-In" || g.Status == "CheckedIn"));
+                
+                if (guest == null)
+                {
+                    _logger.LogDebug("No checked-in guest found for room {Room}", roomNumber);
+                    return false;
+                }
+
+                // Get package settings
+                int downloadKbps = 10240;
+                int uploadKbps = 5120;
+                bool sharedBandwidth = true;
+
+                // Check for active paid package
+                var activePaidPackage = await dbContext.PaymentTransactions
+                    .Where(t => t.GuestId == guest.Id && 
+                               t.Status == "Completed" &&
+                               t.CompletedAt.HasValue &&
+                               t.CompletedAt.Value.AddHours(t.DurationHours ?? 24) > DateTime.UtcNow)
+                    .OrderByDescending(t => t.CompletedAt)
+                    .Select(t => t.PaidPackageId)
+                    .FirstOrDefaultAsync();
+
+                if (activePaidPackage > 0)
+                {
+                    var paidPackage = await dbContext.PaidPackages.FindAsync(activePaidPackage);
+                    if (paidPackage != null)
+                    {
+                        downloadKbps = paidPackage.DownloadSpeedKbps ?? paidPackage.SpeedLimitKbps ?? 20480;
+                        uploadKbps = paidPackage.UploadSpeedKbps ?? paidPackage.SpeedLimitKbps ?? 10240;
+                        sharedBandwidth = paidPackage.SharedBandwidth;
+                    }
+                }
+                else
+                {
+                    var stayLength = (guest.DepartureDate - guest.ArrivalDate).Days;
+                    var freePackage = await dbContext.BandwidthPackages
+                        .Where(p => p.IsActive && p.MinStayDays <= stayLength)
+                        .OrderByDescending(p => p.MinStayDays)
+                        .FirstOrDefaultAsync();
+
+                    if (freePackage != null)
+                    {
+                        downloadKbps = freePackage.DownloadSpeedKbps ?? freePackage.SpeedLimitKbps ?? 10240;
+                        uploadKbps = freePackage.UploadSpeedKbps ?? freePackage.SpeedLimitKbps ?? 5120;
+                        sharedBandwidth = freePackage.SharedBandwidth;
+                    }
+                }
+
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Count active devices
+                var activeDeviceCount = await CountActiveDevicesAsync(connection, roomNumber);
+                
+                if (activeDeviceCount == 0)
+                {
+                    _logger.LogDebug("No active devices for room {Room}", roomNumber);
+                    return true;
+                }
+
+                // Calculate effective bandwidth
+                int effectiveDownloadKbps = downloadKbps;
+                int effectiveUploadKbps = uploadKbps;
+
+                if (sharedBandwidth && activeDeviceCount > 1)
+                {
+                    effectiveDownloadKbps = Math.Max(1024, downloadKbps / activeDeviceCount);
+                    effectiveUploadKbps = Math.Max(512, uploadKbps / activeDeviceCount);
+                    
+                    _logger.LogInformation("Updating shared bandwidth for Room {Room}: {Devices} devices, {Down}k/{Up}k per device",
+                        roomNumber, activeDeviceCount, effectiveDownloadKbps, effectiveUploadKbps);
+                }
+
+                // Update radreply with new bandwidth
+                var rateLimit = $"{effectiveUploadKbps}k/{effectiveDownloadKbps}k";
+                
+                await ExecuteAsync(connection, 
+                    $"UPDATE {_tablePrefix}reply SET value = @value WHERE username = @username AND attribute = 'Mikrotik-Rate-Limit'",
+                    new[] {
+                        new MySqlParameter("@username", roomNumber),
+                        new MySqlParameter("@value", rateLimit)
+                    });
+
+                await ExecuteAsync(connection, 
+                    $"UPDATE {_tablePrefix}reply SET value = @value WHERE username = @username AND attribute = 'WISPr-Bandwidth-Max-Down'",
+                    new[] {
+                        new MySqlParameter("@username", roomNumber),
+                        new MySqlParameter("@value", (effectiveDownloadKbps * 1000).ToString())
+                    });
+
+                await ExecuteAsync(connection, 
+                    $"UPDATE {_tablePrefix}reply SET value = @value WHERE username = @username AND attribute = 'WISPr-Bandwidth-Max-Up'",
+                    new[] {
+                        new MySqlParameter("@username", roomNumber),
+                        new MySqlParameter("@value", (effectiveUploadKbps * 1000).ToString())
+                    });
+
+                _logger.LogInformation("Updated bandwidth for Room {Room}: {RateLimit}", roomNumber, rateLimit);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating bandwidth for room {Room}", roomNumber);
                 return false;
             }
         }
@@ -902,8 +1118,16 @@ namespace HotelWifiPortal.Services.Radius
                     await CreateOrUpdateGroupAsync(groupName, profile.DownloadSpeedKbps, profile.UploadSpeedKbps);
                 }
 
-                await CreateOrUpdateGroupAsync("guests", 2048, 1024);
-                await CreateOrUpdateGroupAsync("vip", 10240, 5120);
+                // Create generic groups WITHOUT bandwidth (bandwidth comes from radreply)
+                // Clear any existing bandwidth from guests group
+                using var connection = new MySqlConnection(_connectionString);
+                await connection.OpenAsync();
+                await ExecuteAsync(connection, $"DELETE FROM {_tablePrefix}groupreply WHERE groupname = 'guests'",
+                    Array.Empty<MySqlParameter>());
+                await ExecuteAsync(connection, $"DELETE FROM {_tablePrefix}groupreply WHERE groupname = 'vip'",
+                    Array.Empty<MySqlParameter>());
+                
+                _logger.LogInformation("Cleared bandwidth from 'guests' and 'vip' groups - user bandwidth comes from radreply");
             }
             catch (Exception ex)
             {
@@ -1304,6 +1528,34 @@ INSERT IGNORE INTO `{_tablePrefix}groupreply` (`groupname`, `attribute`, `op`, `
             using var cmd = new MySqlCommand(sql, connection, transaction);
             cmd.Parameters.AddRange(parameters);
             await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// Count active devices (sessions) for a username in radacct
+        /// </summary>
+        private async Task<int> CountActiveDevicesAsync(MySqlConnection connection, string username)
+        {
+            try
+            {
+                var sql = $@"
+                    SELECT COUNT(DISTINCT callingstationid) 
+                    FROM {_tablePrefix}acct 
+                    WHERE username = @username AND acctstoptime IS NULL";
+                
+                using var cmd = new MySqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@username", username);
+                
+                var result = await cmd.ExecuteScalarAsync();
+                var count = Convert.ToInt32(result ?? 0);
+                
+                _logger.LogDebug("Room {Room} has {Count} active device(s)", username, count);
+                return count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error counting active devices for {Username}", username);
+                return 1; // Default to 1 on error
+            }
         }
 
         private string ComputeNtHash(string password)

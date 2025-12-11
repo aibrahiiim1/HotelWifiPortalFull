@@ -52,7 +52,12 @@ namespace HotelWifiPortal.Controllers.Admin
                 MaxStayDays = model.MaxStayDays,
                 QuotaGB = model.QuotaGB,
                 SpeedLimitKbps = model.SpeedLimitKbps,
-                BadgeColor = model.BadgeColor,
+                DownloadSpeedKbps = model.DownloadSpeedKbps,
+                UploadSpeedKbps = model.UploadSpeedKbps,
+                MaxDevices = model.MaxDevices > 0 ? model.MaxDevices : 3,
+                SharedUsage = model.SharedUsage,
+                SharedBandwidth = model.SharedBandwidth,
+                BadgeColor = model.BadgeColor ?? "primary",
                 SortOrder = model.SortOrder,
                 IsActive = model.IsActive,
                 CreatedAt = DateTime.UtcNow,
@@ -62,7 +67,8 @@ namespace HotelWifiPortal.Controllers.Admin
             _dbContext.BandwidthPackages.Add(package);
             await _dbContext.SaveChangesAsync();
 
-            _logger.LogInformation("Bandwidth package created: {Name}", package.Name);
+            _logger.LogInformation("Bandwidth package created: {Name}, DL={DL}kbps, UL={UL}kbps", 
+                package.Name, package.DownloadSpeedKbps, package.UploadSpeedKbps);
             TempData["Success"] = "Package created successfully.";
 
             return RedirectToAction(nameof(Index));
@@ -343,7 +349,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault)
                     .ToListAsync();
-
+                
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -425,7 +431,7 @@ namespace HotelWifiPortal.Controllers.Admin
                 var existingDefault = await _dbContext.BandwidthProfiles
                     .Where(p => p.IsDefault && p.Id != id)
                     .ToListAsync();
-
+                
                 foreach (var p in existingDefault)
                 {
                     p.IsDefault = false;
@@ -551,7 +557,7 @@ namespace HotelWifiPortal.Controllers.Admin
 
                 // Get FIAS server service
                 var fiasServer = HttpContext.RequestServices.GetRequiredService<HotelWifiPortal.Services.PMS.FiasSocketServer>();
-
+                
                 if (!fiasServer.IsConnected)
                 {
                     TempData["Error"] = "Not connected to PMS. Please check FIAS connection.";
@@ -572,15 +578,15 @@ namespace HotelWifiPortal.Controllers.Admin
                 transaction.PostedToPMSAt = DateTime.UtcNow;
                 transaction.Status = "PostedToPMS";
                 transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
-                transaction.PMSResponse = pmsSettings.PostByReservationNumber
-                    ? $"Success (by Reservation# {transaction.ReservationNumber})"
+                transaction.PMSResponse = pmsSettings.PostByReservationNumber 
+                    ? $"Success (by Reservation# {transaction.ReservationNumber})" 
                     : $"Success (by Room {transaction.RoomNumber})";
                 await _dbContext.SaveChangesAsync();
 
-                var identifier = pmsSettings.PostByReservationNumber
-                    ? $"Reservation# {transaction.ReservationNumber}"
+                var identifier = pmsSettings.PostByReservationNumber 
+                    ? $"Reservation# {transaction.ReservationNumber}" 
                     : $"Room {transaction.RoomNumber}";
-
+                    
                 _logger.LogInformation("Manually posted transaction {Id} to PMS: {Identifier}, Amount {Amount}",
                     transaction.Id, identifier, transaction.Amount);
 
@@ -641,8 +647,8 @@ namespace HotelWifiPortal.Controllers.Admin
                     transaction.PostedToPMSAt = DateTime.UtcNow;
                     transaction.Status = "PostedToPMS";
                     transaction.PMSPostingId = Guid.NewGuid().ToString("N")[..16];
-                    transaction.PMSResponse = pmsSettings.PostByReservationNumber
-                        ? $"Success (by Reservation# {transaction.ReservationNumber})"
+                    transaction.PMSResponse = pmsSettings.PostByReservationNumber 
+                        ? $"Success (by Reservation# {transaction.ReservationNumber})" 
                         : $"Success (by Room {transaction.RoomNumber})";
                     posted++;
                 }
